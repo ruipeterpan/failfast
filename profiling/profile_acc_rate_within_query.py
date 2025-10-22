@@ -236,7 +236,7 @@ parser.add_argument("--dataset_name", type=str, choices=["aime", "math", "gpqa"]
                     help="Dataset")
 parser.add_argument("--output_dir", type=str, default="/data2/ruipan/diffspec", 
                     help="Where result pickle files (and output figures) will be written to")
-parser.add_argument("--num_questions", type=int, default=30,
+parser.add_argument("--num_questions", type=int, default=1,
                     help="Number of questions to run profiling on")
 args, _ = parser.parse_known_args()
 args.output_dir_figures = os.path.join(args.output_dir, "figures", "acc_rate_within_query", args.dataset_name)
