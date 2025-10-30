@@ -19,6 +19,9 @@ sys.path.insert(1, os.path.dirname(os.getcwd()))
 from plotting import (
     visualize_boolean_series,
 )
+from utils import (
+    calculate_spec_decoding_speedup,
+)
 
 class Colors:
     YELLOW = '\033[93m'
@@ -232,20 +235,24 @@ for d in [args.output_dir_figures, args.output_dir_pickles]:
     os.makedirs(d, exist_ok=True)
 dataset = get_dataset(args.dataset_name)
 
-args.latency = {
+args.latency = {  # a6000, hf generate latencies
     "draft_fwd_pass": 28,  # ms; dLLM 1.5B drafter forward pass latency
     "target_tpt": 105,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
 }
+# args.latency = {  # a6000, vllm latencies (assuming dllm latency is similar to 1.5b ar)
+#     "draft_fwd_pass": 6.1,  # ms; dLLM 1.5B drafter forward pass latency
+#     "target_tpt": 52.6,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
+# }
 
 args.overwrite = False
-args.drafter_threshold = 0.9
+args.drafter_threshold = 0.3
 args.dllm_dir = "/data2/ruipan/Fast_dLLM_v2_1.5B"
-args.max_new_tokens = 64
+args.max_new_tokens = 128
 
 # %%
 # draft_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
-# target_model_name = "Qwen/Qwen2.5-32B-Instruct"
-target_model_name = "Qwen/Qwen2.5-7B-Instruct"  # easier debugging
+target_model_name = "Qwen/Qwen2.5-32B-Instruct"
+# target_model_name = "Qwen/Qwen2.5-7B-Instruct"  # easier debugging
 # target_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
 dllm_name = "Efficient-Large-Model/Fast_dLLM_v2_1.5B"
 
@@ -311,7 +318,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                 output_seqlen=32,
                                                 small_block_size=8,
                                                 threshold=args.drafter_threshold,
-                                                is_drafter=False,)
+                                                is_drafter=True,)
         total_num_forward_passes += num_forward_passes
         # print(f"forward_pass_latencies {forward_pass_latencies}")  # similar to TPT of 1.5B AR model
         
@@ -342,8 +349,8 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
             
         # if all draft tokens are accepted, add one more token for free (from the verification prefill)
         if draft_proposal == target_slice:
-            print(f"{Colors.GREEN}All {len(draft_proposal)} speculative tokens accepted this round! free_token_index {free_token_index}{Colors.RESET}")
             free_token_index = len(current_token_ids) + args.veri_freq
+            print(f"{Colors.GREEN}All {len(draft_proposal)} speculative tokens accepted this round! free_token_index {free_token_index}{Colors.RESET}")
             if free_token_index >= len(target_ids):
                 continue  # no more free tokens to add
             current_token_ids.append(target_ids[free_token_index])
@@ -361,7 +368,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
     acceptance_rate = accepted_tokens / (accepted_tokens + rejected_tokens)
     print(f"{Colors.MAGENTA}drafter_threshold: {args.drafter_threshold}{Colors.RESET}")
     print(f"{Colors.MAGENTA}Problem {problem_id} acceptance rate: {acceptance_rate * 100:.1f}% ({accepted_tokens}/{num_target_tokens}){Colors.RESET}")
-    print(f"{Colors.MAGENTA}Problem {problem_id} num. spec. rounds: {num_speculation_rounds}, drafter forward passes: {total_num_forward_passes}{Colors.RESET}")
+    print(f"{Colors.MAGENTA}Problem {problem_id} avg fwd passes/round: {total_num_forward_passes / num_speculation_rounds:.2f} ({total_num_forward_passes}/{num_speculation_rounds}){Colors.RESET}")
     if accepted_tokens + rejected_tokens != num_target_tokens:
         print(f"{Colors.RED}Warning: accepted + rejected != num_target_tokens!{Colors.RESET}")
     
@@ -371,7 +378,13 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
     total_tpt = latency_draft + latency_target
     avg_tpt = total_tpt / num_target_tokens
     speedup = args.latency["target_tpt"] / avg_tpt
+    theoretical_speedup = calculate_spec_decoding_speedup(
+        alpha=0.9,  # offline-profiled acceptance rate of AR 1.5B drafter
+        gamma=args.veri_freq,
+        c=args.latency["draft_fwd_pass"] / args.latency["target_tpt"],
+    )
     print(f"{Colors.MAGENTA}Avg TPT of SD: {avg_tpt:.2f}ms (Speedup: {speedup:.2f}x; Drafter latency ratio {latency_draft / total_tpt * 100:.1f}%){Colors.RESET}")
+    print(f"{Colors.MAGENTA}Theoretical speedup of vanilla SD: {theoretical_speedup:.2f}x. Win: {speedup / theoretical_speedup:.3f}x.{Colors.RESET}")
 
     # export
     if args.overwrite:
