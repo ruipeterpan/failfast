@@ -8,12 +8,13 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # ----------------------------
 # Configuration
 # ----------------------------
+# draft_model_name = "Qwen/Qwen2.5-7B-Instruct"
 draft_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
 dllm_name = "Efficient-Large-Model/Fast_dLLM_v2_1.5B"
-dataset_name = "math"
+dataset_name = "aime"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 n = 512  # number of new tokens to generate
-num_problems = 1  # adjust as needed
+num_problems = 5  # adjust as needed
 
 # ----------------------------
 # Load models and tokenizers
@@ -83,13 +84,13 @@ def profile_model(model, tokenizer, name, dataset, num_problems, n):
         model_inputs = tokenizer(prompt, return_tensors="pt").to(device)
 
         start_time = time.perf_counter()
-        if name == "Qwen2.5-1.5B-Instruct":
+        if "Qwen" in name:
             generated_ids = model.generate(
                 **model_inputs,
                 max_new_tokens=n,
                 do_sample=False,  # greedy decoding
             )
-        elif name == "Fast_dLLM_v2_1.5B":
+        elif "Fast_dLLM_v2_1.5B" in name:
             generated_ids = dllm.generate(
                 **model_inputs,
                 max_new_tokens=n,  # NOTE(ruipan): setting this to 8 will not lead to new tokens hmm
@@ -98,6 +99,8 @@ def profile_model(model, tokenizer, name, dataset, num_problems, n):
                 # use greedy decoding, not sampling
                 do_sample=False,
             )
+        else:
+            raise NotImplementedError
         if device == "cuda":
             torch.cuda.synchronize()
         elapsed = time.perf_counter() - start_time
@@ -117,8 +120,8 @@ def profile_model(model, tokenizer, name, dataset, num_problems, n):
 # ----------------------------
 # Run profiling
 # ----------------------------
-tpt_draft = profile_model(draft_model, draft_tokenizer, "Qwen2.5-1.5B-Instruct", dataset, num_problems, n)
-tpt_dllm = profile_model(dllm, dllm_tokenizer, "Fast_dLLM_v2_1.5B", dataset, num_problems, n)
+tpt_draft = profile_model(draft_model, draft_tokenizer, draft_model_name, dataset, num_problems, n)
+tpt_dllm = profile_model(dllm, dllm_tokenizer, dllm_name, dataset, num_problems, n)
 
 print("\n=======================")
 print(f"Qwen2.5-1.5B-Instruct: {tpt_draft:.2f} ms/token")
