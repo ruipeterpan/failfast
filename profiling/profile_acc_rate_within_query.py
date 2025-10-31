@@ -320,7 +320,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                 output_seqlen=32,
                                                 small_block_size=8,
                                                 threshold=args.drafter_threshold,
-                                                is_drafter=False,)
+                                                is_drafter=True,)
         total_num_forward_passes += num_forward_passes
         # print(f"forward_pass_latencies {forward_pass_latencies}")  # similar to TPT of 1.5B AR model
         
@@ -381,7 +381,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
     avg_tpt = total_tpt / num_target_tokens
     speedup = args.latency["target_tpt"] / avg_tpt
     theoretical_speedup = calculate_spec_decoding_speedup(
-        alpha=0.726,  # offline-profiled acceptance rate of AR 1.5B drafter
+        alpha=0.785,  # offline-profiled acceptance rate of AR 1.5B drafter
         gamma=args.veri_freq,
         c=args.latency["draft_fwd_pass"] / args.latency["target_tpt"],
     )

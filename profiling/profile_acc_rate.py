@@ -39,7 +39,7 @@ separate logical reasoning steps with two newline characters (\n\n), and put you
 Problem: {problem}
 """
 
-dataset_name = "math"
+dataset_name = "aime"
 
 if dataset_name == "aime":
     dataset = load_dataset("HuggingFaceH4/aime_2024")["train"]
@@ -96,12 +96,12 @@ def get_target_token_ids(model, tokenizer, messages):
     
     generated_ids = model.generate(
         **model_inputs,
-        max_new_tokens=512,  # was 512 in vanilla sd experiments
+        max_new_tokens=16,  # was 512 in vanilla sd experiments
         # use greedy decoding, not sampling
         do_sample=False,
-        # temperature=1.0,
-        # top_p=1.0,
-        # top_k=0.0,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=0.0,
     )
     generated_ids = [
         output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
@@ -127,9 +127,9 @@ def get_next_n_tokens(model, orig_model_inputs, token_ids_so_far, n):
         max_new_tokens=n,
         # use greedy decoding, not sampling
         do_sample=False,
-        # temperature=1.0,
-        # top_p=1.0,
-        # top_k=0.0,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=0.0,
     )
     generated_ids = generated_ids[0][len(new_model_inputs["input_ids"][0]):]
     
@@ -210,23 +210,30 @@ for problem_id in range(1):
         inner_bar = tqdm(total=num_target_tokens, miniters=25, desc=f"Verification (Problem {problem_id})",
                         position=1, leave=True, dynamic_ncols=False, file=sys.stdout)
 
+    num_speculation_rounds = 0
     while len(current_token_ids) < len(target_ids):
+        num_speculation_rounds += 1
+        
         # Get next n speculative tokens from draft model
-        # draft_proposal = get_next_n_tokens(draft_model, orig_model_inputs, current_token_ids, n=n)
-        draft_proposal = get_next_n_tokens_dllm(dllm, orig_model_inputs, current_token_ids, n=n)
+        draft_proposal = get_next_n_tokens(draft_model, orig_model_inputs, current_token_ids, n=n)
+        # draft_proposal = get_next_n_tokens_dllm(dllm, orig_model_inputs, current_token_ids, n=n)
         
         # The corresponding slice of ground-truth target tokens
         target_slice = target_ids[len(current_token_ids): len(current_token_ids) + n]
+        
+        print(f"Speculation round {num_speculation_rounds}, current length: {len(current_token_ids)}")
+        print(f"target_slice {target_slice}, draft_proposal {draft_proposal}")
 
         # Compare draft proposal with target tokens one by one
-        for draft_tok, target_tok in zip(draft_proposal, target_slice):
-            if is_interactive():
-                inner_bar.update(1)
+        for i, (draft_tok, target_tok) in enumerate(zip(draft_proposal, target_slice)):
+            print(f"Spec round {num_speculation_rounds}, token index {i}, draft_tok {draft_tok}, target_tok {target_tok}")
             if draft_tok == target_tok:
                 accepted_tokens += 1
+                if is_interactive():
+                    inner_bar.update(1)
                 current_token_ids.append(draft_tok)
             else:
-                rejected_tokens += 1
+                rejected_tokens += (n - i)  # all remaining tokens in this proposal are rejected
                 # replace with correct target token, sync with target model
                 current_token_ids.append(target_tok)
                 # print(f"Rejection, current length: {len(current_token_ids)}, draft_tok {draft_tok}, target_tok {target_tok}")
@@ -242,7 +249,9 @@ for problem_id in range(1):
             if free_token_index >= len(target_ids):
                 continue  # no more free tokens to add
             current_token_ids.append(target_ids[free_token_index])
-            accepted_tokens += 1  # XXX(ruipan): is this correct? how is acceptance rate defined?
+            # accepted_tokens += 1  # NOTE(ruipan): should this free lunch token count as an accepted token?
+            if is_interactive():
+                inner_bar.update(1)
 
         # If we’ve already matched the full target sequence, stop
         if len(current_token_ids) >= len(target_ids):
@@ -255,6 +264,7 @@ for problem_id in range(1):
     acceptance_rate = accepted_tokens / (accepted_tokens + rejected_tokens)
     print(f"{Colors.YELLOW}Problem {problem_id} acceptance rate: {acceptance_rate:.3f}{Colors.RESET}")
     print(f"Accepted: {accepted_tokens}, Rejected: {rejected_tokens}, Total: {accepted_tokens + rejected_tokens}")
+    print(f"Number of speculation rounds: {num_speculation_rounds}")
     total_accepted_tokens += accepted_tokens
     total_rejected_tokens += rejected_tokens
 
