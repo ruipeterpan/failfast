@@ -5,7 +5,7 @@ import openai
 from openai import OpenAI
 from datasets import load_dataset, load_from_disk
 
-port = 30001
+port = 30000
 client = OpenAI(
     api_key="EMPTY",
     base_url=f"http://localhost:{port}/v1",
@@ -42,7 +42,7 @@ else:
 total_time = 0
 total_output_tokens = 0
 
-for problem_id in range(10):
+for problem_id in range(1):
     if dataset_name == "aime":
         problem = dataset["problem"][problem_id]
         options = None

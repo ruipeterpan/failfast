@@ -11,6 +11,7 @@ from datasets import load_dataset, load_from_disk
 from transformers import AutoModelForCausalLM, AutoTokenizer
 # transformers.logging.set_verbosity_info()
 transformers.logging.set_verbosity_error()
+transformers.set_seed(42)
 
 class Colors:
     YELLOW = '\033[93m'
@@ -59,18 +60,19 @@ target_model_name = "Qwen/Qwen2.5-32B-Instruct"
 # target_model_name = "Qwen/Qwen2.5-7B-Instruct"
 dllm_name = "Efficient-Large-Model/Fast_dLLM_v2_1.5B"
 
-draft_model = AutoModelForCausalLM.from_pretrained(
-    draft_model_name,
-    torch_dtype="auto",
-    device_map="auto"
-)
-draft_tokenizer = AutoTokenizer.from_pretrained(draft_model_name)
 target_model = AutoModelForCausalLM.from_pretrained(
     target_model_name,
     torch_dtype="auto",
     device_map="auto"
 )
 target_tokenizer = AutoTokenizer.from_pretrained(target_model_name)
+draft_model = AutoModelForCausalLM.from_pretrained(
+    draft_model_name,
+    torch_dtype="auto",
+    device_map="auto"
+)
+# draft_tokenizer = AutoTokenizer.from_pretrained(draft_model_name)
+draft_tokenizer = target_tokenizer  # assume they use the same tokenizer
 # NOTE(ruipan): maybe they should use the same tokenizer?
 dllm = AutoModelForCausalLM.from_pretrained(
     dllm_name,
@@ -99,7 +101,7 @@ def get_target_token_ids(model, tokenizer, messages):
         max_new_tokens=16,  # was 512 in vanilla sd experiments
         # use greedy decoding, not sampling
         do_sample=False,
-        temperature=1.0,
+        temperature=0.0,
         top_p=1.0,
         top_k=0.0,
     )
@@ -127,7 +129,7 @@ def get_next_n_tokens(model, orig_model_inputs, token_ids_so_far, n):
         max_new_tokens=n,
         # use greedy decoding, not sampling
         do_sample=False,
-        temperature=1.0,
+        temperature=0.0,
         top_p=1.0,
         top_k=0.0,
     )
@@ -159,9 +161,9 @@ def get_next_n_tokens_dllm(dllm, orig_model_inputs, token_ids_so_far, n, output_
         threshold=threshold,
         # use greedy decoding, not sampling
         do_sample=False,
-        # temperature=1.0,
-        # top_p=1.0,
-        # top_k=0.0,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0.0,
     )
     
     full_output_seqlen = generated_ids.shape[1]
@@ -244,7 +246,7 @@ for problem_id in range(1):
                 # FIXME(ruipan): math, question 1, len(target_ids) = 235, strange mismatch at len 148
             # print(f"Progress: len(current_token_ids) = {len(current_token_ids)}")
         
-        if draft_proposal == target_slice:
+        if draft_proposal == target_slice:  # this logic seems to be throwing off the acceptance rate by a lot
             free_token_index = len(current_token_ids) + n
             if free_token_index >= len(target_ids):
                 continue  # no more free tokens to add
