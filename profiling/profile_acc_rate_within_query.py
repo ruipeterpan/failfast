@@ -320,7 +320,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
         # draft_proposal = get_next_n_tokens(draft_model, orig_model_inputs, current_token_ids, n=n)
         draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm(dllm, orig_model_inputs, current_token_ids, 
                                                 veri_freq=args.veri_freq,  # number of speculative tokens proposed each time
-                                                output_seqlen=32,
+                                                output_seqlen=64,  # 2 blocks of 32. Ensures veri_freq tokens are generated in case they span over two blocks
                                                 small_block_size=8,
                                                 threshold=args.drafter_threshold,
                                                 is_drafter=True,)
@@ -426,9 +426,9 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
     # export
     status_per_round = pickled_data["status_per_round"]
     if args.overwrite:
-        visualize_acc_rate_over_time(status_per_round, output_dir=args.output_dir_figures, problem_id=problem_id)
+        visualize_acc_rate_over_time(status_per_round, veri_freq=args.veri_freq, output_dir=args.output_dir_figures, problem_id=problem_id)
     else:
-        visualize_acc_rate_over_time(status_per_round, output_dir=None, problem_id=None)
+        visualize_acc_rate_over_time(status_per_round, veri_freq=args.veri_freq, output_dir=None, problem_id=None)
     
     pickled_data["num_speculation_rounds"] = num_speculation_rounds
     pickled_data["total_num_forward_passes"] = total_num_forward_passes
