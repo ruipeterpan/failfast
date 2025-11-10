@@ -185,7 +185,7 @@ def get_next_n_tokens_dllm(dllm, orig_model_inputs, token_ids_so_far, veri_freq,
         'attention_mask': torch.cat([orig_model_inputs['attention_mask'], new_mask], dim=1)
     }
 
-    generated_ids, num_forward_passes, forward_pass_latencies = dllm.generate(
+    generated_ids, num_forward_passes, forward_pass_latencies = dllm.generate_draft_tokens(
         # **new_model_inputs,
         new_model_inputs["input_ids"],
         max_new_tokens=output_seqlen,  # NOTE(ruipan): setting this to 8 will not lead to new tokens hmm
