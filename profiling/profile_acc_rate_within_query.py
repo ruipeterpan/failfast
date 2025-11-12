@@ -1,6 +1,7 @@
 # %%
 import os
 import sys
+import copy
 import time
 import torch
 import openai
@@ -269,14 +270,14 @@ args, _ = parser.parse_known_args()
 
 
 ######custom fields for easier debugging######
-# # args.log_level = "DEBUG"
-# args.overwrite = False
-# # args.disable_reusing_drafter_kvs = True
+# args.log_level = "DEBUG"
+args.overwrite = False
+# args.disable_reusing_drafter_kvs = True
 # args.run_ar = True
 # args.read_pickle = True
 # args.drafter_thresholds = [0.9, 0.7, 0.5, 0.3, 0.1, 0.01]
-# # args.drafter_thresholds = [0.01]
-# args.dllm_dir = "/data2/ruipan/Fast_dLLM_v2_1.5B"
+args.drafter_thresholds = [0.01]
+args.dllm_dir = "/data2/ruipan/Fast_dLLM_v2_1.5B"
 ######custom fields for easier debugging######
 
 logging.basicConfig(
@@ -329,7 +330,8 @@ if args.run_ar:
     draft_tokenizer = target_tokenizer
 
 # %%
-for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
+# for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
+for problem_id in [12]:
     transformers.set_seed(42)  # reproducibility for each question-model-model config pairing
     problem, options = format_problem_and_options(args, problem_id)
     messages = [
@@ -391,6 +393,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
             while len(current_token_ids) < len(target_ids):
                 logging.debug(f"--- [{draft_type}_{drafter_threshold}] Speculation round {num_speculation_rounds} ---")
                 num_speculation_rounds += 1
+                current_token_ids_snapshot = copy.deepcopy(current_token_ids)
                 
                 # A. PROPOSE: Get next n speculative tokens from draft model based on current accepted prefix
                 if draft_type == "ar":
@@ -471,7 +474,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                 rejected_tokens += len(draft_proposal) - accepted_len
                 
                 info_this_round = {
-                    "current_token_ids": current_token_ids,
+                    "current_token_ids": current_token_ids_snapshot,
                     "target_tokens": target_tokens,
                     "draft_proposal": draft_proposal,
                     "accepted_len": accepted_len,

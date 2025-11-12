@@ -1,6 +1,7 @@
 # %%
 import os
 import sys
+import copy
 import time
 import torch
 import openai
@@ -34,6 +35,7 @@ class Colors:
     RED = '\033[91m'
     GREEN = '\033[92m'
     BOLD = '\033[1m'
+    STRIKETHROUGH = '\033[9m' # The code for a line across text
     RESET = '\033[0m'
 
 def is_interactive():
@@ -237,6 +239,9 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, veri
     return generated_ids, num_forward_passes, forward_pass_latencies
 
 
+def get_dynamic_threshold(curr_seqlen):
+    # if in a region where the acceptance rate is high, use 
+    return 0.9
 
 
 # %%
@@ -272,7 +277,7 @@ args, _ = parser.parse_known_args()
 # args.log_level = "DEBUG"
 args.overwrite = False
 # args.disable_reusing_drafter_kvs = True
-args.run_ar = True
+args.run_ar = False
 args.read_pickle = True
 args.drafter_thresholds = [0.9, 0.7, 0.5, 0.3, 0.1, 0.01]
 # args.drafter_thresholds = [0.01]
@@ -390,8 +395,12 @@ for problem_id in [12]:
                                 position=1, leave=True, dynamic_ncols=False, file=sys.stdout)
 
             while len(current_token_ids) < len(target_ids):
+                drafter_threshold = get_dynamic_threshold(
+                    curr_seqlen=len(current_token_ids),
+                )
                 logging.debug(f"--- [{draft_type}_{drafter_threshold}] Speculation round {num_speculation_rounds} ---")
                 num_speculation_rounds += 1
+                current_token_ids_snapshot = copy.deepcopy(current_token_ids)
                 
                 # A. PROPOSE: Get next n speculative tokens from draft model based on current accepted prefix
                 if draft_type == "ar":
@@ -472,7 +481,7 @@ for problem_id in [12]:
                 rejected_tokens += len(draft_proposal) - accepted_len
                 
                 info_this_round = {
-                    "current_token_ids": current_token_ids,
+                    "current_token_ids": current_token_ids_snapshot,
                     "target_tokens": target_tokens,
                     "draft_proposal": draft_proposal,
                     "accepted_len": accepted_len,
@@ -520,7 +529,8 @@ for problem_id in [12]:
         pickled_data["accepted_tokens"] = accepted_tokens
         pickled_data["rejected_tokens"] = rejected_tokens
         
-        if args.overwrite or (not os.path.exists(os.path.join(output_dir_pickles, f"{draft_type}_{drafter_threshold}.pickle"))):
+        # if args.overwrite or (not os.path.exists(os.path.join(output_dir_pickles, f"{draft_type}_{drafter_threshold}.pickle"))):
+        if args.overwrite:
             with open(os.path.join(output_dir_pickles, f"{draft_type}_{drafter_threshold}.pickle"), "wb") as f:
                 pickle.dump(pickled_data, f)
             with open(os.path.join(output_dir_pickles, f"{draft_type}_{drafter_threshold}.txt"), "w") as f:
