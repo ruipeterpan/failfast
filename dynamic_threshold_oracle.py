@@ -269,14 +269,14 @@ args, _ = parser.parse_known_args()
 
 
 ######custom fields for easier debugging######
-# # args.log_level = "DEBUG"
-# args.overwrite = False
-# # args.disable_reusing_drafter_kvs = True
-# args.run_ar = True
-# args.read_pickle = True
-# args.drafter_thresholds = [0.9, 0.7, 0.5, 0.3, 0.1, 0.01]
-# # args.drafter_thresholds = [0.01]
-# args.dllm_dir = "/data2/ruipan/Fast_dLLM_v2_1.5B"
+# args.log_level = "DEBUG"
+args.overwrite = False
+# args.disable_reusing_drafter_kvs = True
+args.run_ar = True
+args.read_pickle = True
+args.drafter_thresholds = [0.9, 0.7, 0.5, 0.3, 0.1, 0.01]
+# args.drafter_thresholds = [0.01]
+args.dllm_dir = "/data2/ruipan/Fast_dLLM_v2_1.5B"
 ######custom fields for easier debugging######
 
 logging.basicConfig(
@@ -329,7 +329,8 @@ if args.run_ar:
     draft_tokenizer = target_tokenizer
 
 # %%
-for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
+# for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
+for problem_id in [12]:
     transformers.set_seed(42)  # reproducibility for each question-model-model config pairing
     problem, options = format_problem_and_options(args, problem_id)
     messages = [
