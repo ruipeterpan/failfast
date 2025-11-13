@@ -26,6 +26,7 @@ from plotting import (
 )
 from utils import (
     calculate_spec_decoding_speedup,
+    print_sd_trajectory,
 )
 
 class Colors:
@@ -239,10 +240,30 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, veri
     return generated_ids, num_forward_passes, forward_pass_latencies
 
 
-def get_dynamic_threshold(curr_seqlen):
-    # if in a region where the acceptance rate is high, use 
-    return 0.9
-
+def get_dynamic_threshold_v1(args, curr_seqlen, output_dir_pickles):
+    # if in a region where the acceptance rate is high, use a low threshold
+    # otherwise, use a higher threshold
+    output_dir_pickles = '/'.join(output_dir_pickles.rsplit('/', 1)[:-1] + ['ar'])  # '/data2/ruipan/diffspec/pickles/detailed_info/math/12/dllm_0.01' -> '.../ar'
+    with open(os.path.join(output_dir_pickles, f"ar_None.pickle"), "rb") as f:
+        ar_pickle = pickle.load(f)
+    stats_per_round = ar_pickle["stats_per_round"]
+    acc_rate_over_seqlen = []
+    for s in stats_per_round:
+        acc_rate_over_seqlen.append((s["prefix_len"], s["accepted_len"] / args.veri_freq,))
+    
+    closest_idx = min(range(len(acc_rate_over_seqlen)), key=lambda i: abs(acc_rate_over_seqlen[i][0] - curr_seqlen))
+    # rate_at_closest_index = acc_rate_over_seqlen[closest_idx][1]
+    # if rate_at_closest_index >= 0.99:
+    try:
+        # if all([x >= 0.99 for x in [acc_rate_over_seqlen[closest_idx - 1][1], acc_rate_over_seqlen[closest_idx][1], acc_rate_over_seqlen[closest_idx + 1][1]]]):
+        if all([x >= 0.99 for x in [acc_rate_over_seqlen[closest_idx][1]]]):
+            t = 0.1
+        else:
+            t = 0.5
+    except IndexError:
+        t = 0.5  # just to be safe near the beginning and end
+    # logging.info(f"Curr seqlen {curr_seqlen}, threshold {t}")
+    return t
 
 # %%
 parser = argparse.ArgumentParser(description="Profiles the acceptance rate of speculative decoding within a single query.")
@@ -275,12 +296,12 @@ args, _ = parser.parse_known_args()
 
 ######custom fields for easier debugging######
 # args.log_level = "DEBUG"
-args.overwrite = False
+args.overwrite = True
 # args.disable_reusing_drafter_kvs = True
 args.run_ar = False
-args.read_pickle = True
-args.drafter_thresholds = [0.9, 0.7, 0.5, 0.3, 0.1, 0.01]
-# args.drafter_thresholds = [0.01]
+# args.read_pickle = True
+# args.drafter_thresholds = [0.9, 0.7, 0.5, 0.3, 0.1, 0.01]
+args.drafter_thresholds = [0.5]
 args.dllm_dir = "/data2/ruipan/Fast_dLLM_v2_1.5B"
 ######custom fields for easier debugging######
 
@@ -291,7 +312,8 @@ logging.basicConfig(
     # datefmt="%m%d",
 )
 args.drafter_configs = [("ar", None)] if args.run_ar else []
-args.drafter_configs.extend([("dllm", thr) for thr in args.drafter_thresholds])
+# args.drafter_configs.extend([("dllm", thr) for thr in args.drafter_thresholds])
+args.drafter_configs.extend([("dllm", "dt")])
 
 dataset = get_dataset(args.dataset_name)
 args.latency = {  # a6000, hf generate latencies
@@ -302,6 +324,7 @@ args.latency = {  # a6000, hf generate latencies
 #     "draft_fwd_pass": 6.1,  # ms; dLLM 1.5B drafter forward pass latency
 #     "target_tpt": 52.6,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
 # }
+
 
 
 
@@ -395,9 +418,6 @@ for problem_id in [12]:
                                 position=1, leave=True, dynamic_ncols=False, file=sys.stdout)
 
             while len(current_token_ids) < len(target_ids):
-                drafter_threshold = get_dynamic_threshold(
-                    curr_seqlen=len(current_token_ids),
-                )
                 logging.debug(f"--- [{draft_type}_{drafter_threshold}] Speculation round {num_speculation_rounds} ---")
                 num_speculation_rounds += 1
                 current_token_ids_snapshot = copy.deepcopy(current_token_ids)
@@ -407,19 +427,28 @@ for problem_id in [12]:
                     draft_proposal = get_next_n_tokens_ar(draft_model, orig_model_inputs, current_token_ids, n=args.veri_freq)
                     num_forward_passes = args.veri_freq  # 1 fwd pass per token for AR drafter
                 elif draft_type == "dllm":
+                    if drafter_threshold == "dt":
+                        drafter_threshold_this_round = get_dynamic_threshold_v1(
+                            args, 
+                            curr_seqlen=len(current_token_ids),  # seqlen before any speculation happened
+                            output_dir_pickles=output_dir_pickles,
+                        )
+                        logging.debug(f"--- Threshold {drafter_threshold_this_round} (current seqlen {len(current_token_ids)}) ---")
+                    else:
+                        drafter_threshold_this_round = drafter_threshold
                     if args.disable_reusing_drafter_kvs:
                         draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                 veri_freq=args.veri_freq,  # number of speculative tokens proposed each time
                                                                 output_seqlen=64,  # 2 blocks of 32. Ensures veri_freq tokens are generated in case they span over two blocks
                                                                 small_block_size=8,
-                                                                threshold=drafter_threshold,
+                                                                threshold=drafter_threshold_this_round,
                                                                 is_drafter=True,)
                     else:
                         draft_proposal, prefill_output, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                 veri_freq=args.veri_freq,  # number of speculative tokens proposed each time
                                                                 output_seqlen=64,  # 2 blocks of 32. Ensures veri_freq tokens are generated in case they span over two blocks
                                                                 small_block_size=8,
-                                                                threshold=drafter_threshold,
+                                                                threshold=drafter_threshold_this_round,
                                                                 is_drafter=True,
                                                                 prev_prefill_output=prev_prefill_output)
                         prev_prefill_output = prefill_output
@@ -497,6 +526,8 @@ for problem_id in [12]:
 
             if is_interactive():
                 inner_bar.close()
+        
+        print_sd_trajectory(pickled_data, target_tokenizer)
 
         # Compute token acceptance rate
         drafted_tokens = num_speculation_rounds * args.veri_freq
@@ -520,14 +551,15 @@ for problem_id in [12]:
         # save and visualize results
         stats_per_round = pickled_data["stats_per_round"]
         if args.overwrite:
-            visualize_acc_rate_over_time(stats_per_round, veri_freq=args.veri_freq, output_dir=output_dir_figures, filename=f"{draft_type}_{drafter_threshold}")
+            visualize_acc_rate_over_time(stats_per_round, veri_freq=args.veri_freq, acceptance_rate=acceptance_rate, output_dir=output_dir_figures, filename=f"{draft_type}_{drafter_threshold}")
         else:
-            visualize_acc_rate_over_time(stats_per_round, veri_freq=args.veri_freq, output_dir=None, filename=None)
+            visualize_acc_rate_over_time(stats_per_round, veri_freq=args.veri_freq, acceptance_rate=acceptance_rate, output_dir=None, filename=None)
         
         pickled_data["num_speculation_rounds"] = num_speculation_rounds
         pickled_data["total_num_forward_passes"] = total_num_forward_passes
         pickled_data["accepted_tokens"] = accepted_tokens
         pickled_data["rejected_tokens"] = rejected_tokens
+        pickled_data["acceptance_rate"] = acceptance_rate
         
         # if args.overwrite or (not os.path.exists(os.path.join(output_dir_pickles, f"{draft_type}_{drafter_threshold}.pickle"))):
         if args.overwrite:

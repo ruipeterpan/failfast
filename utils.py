@@ -17,9 +17,9 @@ def print_sd_trajectory(pickled_data, tokenizer):
     input_text = tokenizer.decode(pickled_data["orig_model_inputs"]["input_ids"][0], skip_special_tokens=False)
     num_input_tokens = len(pickled_data["orig_model_inputs"]["input_ids"][0])
     logging.info(input_text)
-    # logging.info(f"{Colors.BOLD}--- Output ---{Colors.RESET}")
-    # output_text = tokenizer.decode(pickled_data["stats_per_round"][-1]["current_token_ids"], skip_special_tokens=False)
-    # logging.info(output_text)
+    logging.info(f"{Colors.BOLD}--- Output ---{Colors.RESET}")
+    output_text = tokenizer.decode(pickled_data["stats_per_round"][-1]["current_token_ids"], skip_special_tokens=False)
+    logging.info(output_text)
     logging.info(f"{Colors.BOLD}--- Trajectory ---{Colors.RESET}")
     stats_per_round = pickled_data["stats_per_round"]
     output_str = ""

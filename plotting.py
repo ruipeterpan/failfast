@@ -38,7 +38,7 @@ def get_boolean_decision_from_stats_per_round(stats_per_round, veri_freq):
     return decisions
 
 
-def visualize_acc_rate_over_time(stats_per_round, veri_freq, figsize=(12, 3), output_dir=None, filename=None):
+def visualize_acc_rate_over_time(stats_per_round, veri_freq, acceptance_rate, figsize=(12, 3), output_dir=None, filename=None):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, 
                                     gridspec_kw={'height_ratios': [1, 2]}, 
                                     sharex=True)
@@ -52,6 +52,7 @@ def visualize_acc_rate_over_time(stats_per_round, veri_freq, figsize=(12, 3), ou
     # print(f"prefix_lens: {prefix_lens}")
     # print(f"acc_rates: {acc_rates}")
     
+    ax2.axhline(y=acceptance_rate, color="red", linestyle="dashed", zorder=1)
     ax2.plot(prefix_lens, acc_rates, marker='o', linewidth=2, label="Acceptance Rate")
     ax2.set_ylim(-0.1, 1.1)
     ax2.set_xlabel("Token Index (prefix len when drafting)")
