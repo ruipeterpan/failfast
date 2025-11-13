@@ -513,9 +513,9 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
         # save and visualize results
         stats_per_round = pickled_data["stats_per_round"]
         if args.overwrite:
-            visualize_acc_rate_over_time(stats_per_round, veri_freq=args.veri_freq, output_dir=output_dir_figures, filename=f"{draft_type}_{drafter_threshold}")
+            visualize_acc_rate_over_time(stats_per_round, veri_freq=args.veri_freq, acceptance_rate=acceptance_rate, output_dir=output_dir_figures, filename=f"{draft_type}_{drafter_threshold}")
         else:
-            visualize_acc_rate_over_time(stats_per_round, veri_freq=args.veri_freq, output_dir=None, filename=None)
+            visualize_acc_rate_over_time(stats_per_round, veri_freq=args.veri_freq, acceptance_rate=acceptance_rate, output_dir=None, filename=None)
         
         pickled_data["num_speculation_rounds"] = num_speculation_rounds
         pickled_data["total_num_forward_passes"] = total_num_forward_passes
