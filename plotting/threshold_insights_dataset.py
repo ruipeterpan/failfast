@@ -13,11 +13,13 @@ ACCEPT_RE = re.compile(r"Acceptance rate:\s*([\d.]+)%")
 FWD_RE = re.compile(r"Avg fwd passes/round:\s*([\d.]+)")
 SPEED_RE = re.compile(r"Speedup:\s*([\d.]+)x")
 
-# Threshold order (x-axis)
-ORDER = [f"dllm_{x:.2f}".rstrip("0").rstrip(".") for x in np.arange(0.9, 0.0, -0.05)]
+# Threshold order (x-axis) — keep it but we'll rely on parsed drafter keys for plotting.
+ORDER = [f"dllm_{v}" for v in range(3, 26)]
+
 
 def strip_ansi(s: str) -> str:
     return ANSI_RE.sub("", s)
+
 
 def parse_log(filename):
     """Parse the log into {problem_id: {drafter: [accept, speed, fwd]}}"""
@@ -56,29 +58,6 @@ def parse_log(filename):
             if f:
                 data[cur_prob].setdefault(cur_drafter, [None, None, None])[2] = float(f.group(1))
     return data
-
-
-# def compute_global_avg(data):
-#     """
-#     Compute the global average across all problems.
-#     Returns: dicts avg_acc, avg_spd, avg_fwd indexed by drafter name.
-#     """
-#     sums = defaultdict(lambda: [0.0, 0.0, 0.0, 0])  # acc_sum, spd_sum, fwd_sum, count
-#     for _, drafter_data in data.items():
-#         for drafter, (acc, spd, fwd) in drafter_data.items():
-#             if acc is not None and spd is not None and fwd is not None:
-#                 sums[drafter][0] += acc
-#                 sums[drafter][1] += spd
-#                 sums[drafter][2] += fwd
-#                 sums[drafter][3] += 1
-
-#     avg_acc, avg_spd, avg_fwd = {}, {}, {}
-#     for drafter, (a_sum, s_sum, f_sum, cnt) in sums.items():
-#         if cnt > 0:
-#             avg_acc[drafter] = a_sum / cnt
-#             avg_spd[drafter] = s_sum / cnt
-#             avg_fwd[drafter] = f_sum / cnt
-#     return avg_acc, avg_spd, avg_fwd
 
 
 def compute_global_avg(data):
@@ -120,50 +99,64 @@ def compute_global_avg(data):
     return avg_acc, avg_speedup, avg_fwd
 
 
-
 def extract_threshold(drafter_name):
-    """Extract numeric threshold from drafter name, e.g., dllm_0.9 → 0.9"""
+    """Extract verification length from drafter name, e.g., dllm_0.05_25 -> 25"""
     try:
-        return float(drafter_name.split("_")[1])
+        parts = drafter_name.split("_")
+        return int(parts[-1])
     except Exception:
         return None
 
 
-def plot_thresholds(avg_acc, avg_spd, avg_fwd):
-    """Plot global average stats."""
-    thresholds, accs, spds, fwds = [], [], [], []
-    for d in ORDER:
-        thr = extract_threshold(d)
-        if thr is not None and d in avg_acc:
-            thresholds.append(thr)
-            accs.append(avg_acc[d])
-            spds.append(avg_spd[d])
-            fwds.append(avg_fwd[d])
+def plot_thresholds(avg_acc, avg_spd, avg_fwd, baseline=None):
+    """Plot global average stats.
+    baseline: dict with keys 'acc','spd','fwd' or None
+    """
+    vlengths, accs, spds, fwds = [], [], [], []
+    # Collect points from actual avg_* keys (these are full drafter names: dllm_0.05_25)
+    for drafter in avg_acc.keys():
+        # skip AR baseline drafter if present (we removed it earlier, but keep defensive check)
+        if drafter == "ar_None_5":
+            continue
+        vlen = extract_threshold(drafter)
+        if vlen is None:
+            continue
+        if 3 <= vlen <= 25:
+            vlengths.append(vlen)
+            accs.append(avg_acc[drafter])
+            spds.append(avg_spd[drafter])
+            fwds.append(avg_fwd[drafter])
 
-    if not thresholds:
+    if not vlengths:
         print("No valid data to plot.")
         return
 
-    # Sort ascending (0.05 → 0.9)
-    thresholds, accs, spds, fwds = zip(*sorted(zip(thresholds, accs, spds, fwds)))
+    # Sort ascending by verification length
+    vlengths, accs, spds, fwds = zip(*sorted(zip(vlengths, accs, spds, fwds)))
 
     # Shared x-axis: top = speedup, bottom = acceptance rate + fwd passes
     fig, (ax_top, ax_bot) = plt.subplots(
         2, 1, figsize=(8, 6), sharex=True, gridspec_kw={"height_ratios": [1, 1.2]}
     )
 
-    # --- Top: Speedup ---
-    ax_top.plot(thresholds, spds, marker="o", color="tab:blue", label="Speedup (x)")
+    # --- Top: Speedup (blue) ---
+    ax_top.plot(vlengths, spds, marker="o", color="tab:blue", label="Speedup (x)")
     ax_top.set_ylabel("Speedup (x)", color="tab:blue")
     ax_top.tick_params(axis="y", labelcolor="tab:blue")
     ax_top.grid(True, linestyle="--", alpha=0.4)
     ax_top.legend(loc="best")
-    ax_top.set_title("Average Speedup and Acceptance vs Drafter Threshold (All Problems)")
+    ax_top.set_title("Average Speedup and Acceptance vs Verification Length (All Problems)")
 
-    # --- Bottom: Acceptance rate (left) + fwd passes (right) ---
-    ax_bot.plot(thresholds, accs, marker="o", color="tab:green", label="Acceptance rate (%)")
+    # baseline speedup line (blue dashed)
+    if baseline and baseline.get("spd") is not None:
+        ax_top.axhline(baseline["spd"], linestyle="--", color="tab:blue", label="ar_None_5 baseline")
+        # put legend entry for baseline
+        ax_top.legend(loc="best")
+
+    # --- Bottom: Acceptance rate (green) + fwd passes (red) ---
+    ax_bot.plot(vlengths, accs, marker="o", color="tab:green", label="Acceptance rate (%)")
     ax2 = ax_bot.twinx()
-    ax2.plot(thresholds, fwds, marker="s", color="tab:red", label="Avg # fwd passes")
+    ax2.plot(vlengths, fwds, marker="s", color="tab:red", label="Avg # fwd passes")
 
     ax_bot.set_ylabel("Acceptance Rate (%)", color="tab:green")
     ax2.set_ylabel("Avg # Forward Passes", color="tab:red")
@@ -171,11 +164,25 @@ def plot_thresholds(avg_acc, avg_spd, avg_fwd):
     ax2.tick_params(axis="y", labelcolor="tab:red")
     ax_bot.grid(True, linestyle="--", alpha=0.4)
 
-    # --- Shared x-axis formatting ---
-    ax_bot.set_xlabel("Drafter Threshold")
-    xticks = np.arange(0.05, 0.95, 0.05)
+    # baseline acceptance (green dashed)
+    if baseline and baseline.get("acc") is not None:
+        ax_bot.axhline(baseline["acc"], linestyle="--", color="tab:green", alpha=0.8, label="ar_None_5 baseline")
+
+    # # baseline forward passes (red dashed) on twin axis
+    # if baseline and baseline.get("fwd") is not None:
+    #     ax2.axhline(baseline["fwd"], linestyle="--", color="tab:red", alpha=0.8)
+
+    # X axis formatting: verification lengths 3..25
+    ax_bot.set_xlabel("Verification Length")
+    xticks = np.arange(3, 26, 1)
     ax_bot.set_xticks(xticks)
-    ax_bot.set_xticklabels([f"{x:.2f}".rstrip("0").rstrip(".") for x in xticks])
+    ax_bot.set_xticklabels([str(int(x)) for x in xticks])
+
+    # bottom plot should ONLY show its own legends
+    handles_bot, labels_bot = ax_bot.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    ax_bot.legend(handles_bot + handles2, labels_bot + labels2, loc="center right")
+
 
     fig.tight_layout()
     plt.show()
@@ -185,11 +192,55 @@ def plot_thresholds(avg_acc, avg_spd, avg_fwd):
 if __name__ == "__main__":
     # filename = "/data2/ruipan/diffspec/logs/2025_11_13_01_19_math.ansi"  # updated multi-problem log
     # filename = "/data2/ruipan/diffspec/logs/2025_11_13_01_20_aime.ansi"  # updated multi-problem log
-    
+
     # filename = "/data2/ruipan/diffspec/logs/2025_11_18_00_32_math.ansi"
-    filename = "/data2/ruipan/diffspec/logs/2025_11_18_00_38_aime.ansi"
+    filename = "/data2/ruipan/diffspec/logs/2025_11_19_17_18_math.ansi"
     data = parse_log(filename)
+
+    # -------------------------
+    # Compute ar_None_5 baseline across problems, then remove those entries from data
+    # -------------------------
+    baseline_acc_vals = []
+    baseline_spd_vals = []
+    baseline_fwd_vals = []
+    for pid, drafter_data in list(data.items()):
+        if "ar_None_5" in drafter_data:
+            vals = drafter_data["ar_None_5"]
+            # Only include if all three values are present (not None)
+            if vals[0] is not None and vals[1] is not None and vals[2] is not None:
+                baseline_acc_vals.append(vals[0])
+                baseline_spd_vals.append(vals[1])
+                baseline_fwd_vals.append(vals[2])
+            # remove the entry so it won't be part of the main averages/plots
+            del data[pid]["ar_None_5"]
+
+    baseline = {}
+    if baseline_acc_vals:
+        baseline["acc"] = sum(baseline_acc_vals) / len(baseline_acc_vals)
+    else:
+        baseline["acc"] = None
+
+    if baseline_spd_vals:
+        baseline["spd"] = sum(baseline_spd_vals) / len(baseline_spd_vals)
+    else:
+        baseline["spd"] = None
+
+    if baseline_fwd_vals:
+        baseline["fwd"] = sum(baseline_fwd_vals) / len(baseline_fwd_vals)
+    else:
+        baseline["fwd"] = None
+
+    if baseline["acc"] is not None:
+        print(f"ar_None_5 baseline (Acceptance): {baseline['acc']:.3f}%")
+    if baseline["spd"] is not None:
+        print(f"ar_None_5 baseline (Speedup): {baseline['spd']:.3f}x")
+    if baseline["fwd"] is not None:
+        print(f"ar_None_5 baseline (Avg fwd passes): {baseline['fwd']:.3f}")
+
+    # Now compute global averages excluding ar_None_5 (since we've removed it from data)
     avg_acc, avg_spd, avg_fwd = compute_global_avg(data)
-    plot_thresholds(avg_acc, avg_spd, avg_fwd)
+
+    # Plot and pass the baseline for horizontal reference lines
+    plot_thresholds(avg_acc, avg_spd, avg_fwd, baseline=baseline)
 
 # %%
