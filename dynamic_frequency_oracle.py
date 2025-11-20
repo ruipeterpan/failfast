@@ -256,6 +256,31 @@ def get_dynamic_frequency_v0(args, curr_seqlen, output_dir_pickles):
     return veri_freq
 
 
+def get_dynamic_frequency_v1(args, curr_seqlen, freq_so_far, acc_rate_so_far):
+    if curr_seqlen == 0:
+        return args.veri_freq  # first round, use default veri_freq
+    last_freq = freq_so_far[-1]
+    last_acc_rate = acc_rate_so_far[-1]
+    
+    if last_acc_rate == 1.0:  # easy region
+        veri_freq = min(30, last_freq * 2)  # exploratory bump
+    else:  # had some rejections
+        veri_freq = max(int(args.veri_freq * 0.75), int(last_freq * last_acc_rate))
+    return veri_freq
+    
+    # if last_freq == args.veri_freq:
+    #     if last_acc_rate == 1.0:
+    #         veri_freq = 20
+    #     else:
+    #         veri_freq = last_freq
+    # else:
+    #     if last_acc_rate >= 0.5:
+    #         veri_freq = last_freq
+    #     else:
+    #         veri_freq = args.veri_freq
+    # return veri_freq
+    
+
 # %%
 parser = argparse.ArgumentParser(description="Profiles the acceptance rate of speculative decoding within a single query.")
 parser.add_argument("--dataset_name", type=str, choices=["aime", "math", "gpqa"], default="math",
@@ -288,10 +313,12 @@ args, _ = parser.parse_known_args()
 
 
 ######custom fields for easier debugging######
-# args.log_level = "DEBUG"
+args.log_level = "DEBUG"
 # args.overwrite = False
 # # args.disable_reusing_drafter_kvs = True
-args.run_ar = True
+# args.run_ar = True
+# args.num_questions = 5
+args.veri_freq = 10
 # args.read_pickle = True  # TODO: read trajectory from pickle as well
 # # args.drafter_thresholds = [0.9, 0.7, 0.5, 0.3, 0.1, 0.01]
 args.drafter_thresholds = [0.05]
@@ -308,19 +335,20 @@ logging.basicConfig(
     datefmt="%m%d %H:%M:%S",
     # datefmt="%m%d",
 )
-args.drafter_configs = [("ar", None, False)] if args.run_ar else []
-args.drafter_configs.extend([("dllm", thr, False) for thr in args.drafter_thresholds])
-args.drafter_configs.extend([("dllm", 0.05, True)])  # dynamic frequency oracle
+args.drafter_configs = [("ar", None, "sf")] if args.run_ar else []
+# args.drafter_configs.extend([("dllm", thr, "sf") for thr in args.drafter_thresholds])
+# dynamic frequency oracle
+args.drafter_configs.extend([("dllm", thr, "df") for thr in args.drafter_thresholds])
 
 dataset = get_dataset(args.dataset_name)
-# args.latency = {  # a6000, hf generate latencies
-#     "draft_fwd_pass": 28,  # ms; dLLM 1.5B drafter forward pass latency
-#     "target_tpt": 105,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
-# }
-args.latency = {  # a6000, vllm latencies (assuming dllm latency is similar to 1.5b ar)
-    "draft_fwd_pass": 6.1,  # ms; dLLM 1.5B drafter forward pass latency
-    "target_tpt": 52.6,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
+args.latency = {  # a6000, hf generate latencies
+    "draft_fwd_pass": 28,  # ms; dLLM 1.5B drafter forward pass latency
+    "target_tpt": 105,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
 }
+# args.latency = {  # a6000, vllm latencies (assuming dllm latency is similar to 1.5b ar)
+#     "draft_fwd_pass": 6.1,  # ms; dLLM 1.5B drafter forward pass latency
+#     "target_tpt": 52.6,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
+# }
 
 
 target_tokenizer = AutoTokenizer.from_pretrained(target_model_name)
@@ -366,7 +394,7 @@ for problem_id in [12]:
         logging.info(f"[Problem {problem_id}] Target (vanilla) generation length: {num_target_tokens} tokens")
     
     ar_drafter_speedup = None
-    for draft_type, drafter_threshold, is_dynamic_frequency in args.drafter_configs:
+    for draft_type, drafter_threshold, freq_scheme in args.drafter_configs:
         transformers.set_seed(42)  # reproducibility for each question-model-model config pairing
         
         # set up output dirs and export
@@ -392,7 +420,7 @@ for problem_id in [12]:
             total_num_forward_passes = pickled_data["total_num_forward_passes"]
             current_token_ids = pickled_data["stats_per_round"][-1]["current_token_ids"]
         else:  # run the actual spec decoding pipeline
-            logging.info(f"{Colors.BOLD}=== [Problem {problem_id}] Running drafter: {draft_type}_{drafter_threshold}, is_dynamic_frequency {is_dynamic_frequency} ==={Colors.RESET}")
+            logging.info(f"{Colors.BOLD}=== [Problem {problem_id}] Running drafter: {draft_type}_{drafter_threshold}_{freq_scheme} ==={Colors.RESET}")
             accepted_tokens = 0
             rejected_tokens = 0
             num_speculation_rounds = 0
@@ -412,8 +440,11 @@ for problem_id in [12]:
                 inner_bar = tqdm(total=num_target_tokens, miniters=25, desc=f"Verification (Problem {problem_id})",
                                 position=1, leave=True, dynamic_ncols=False, file=sys.stdout)
 
+            freq_so_far = []
+            acc_rate_so_far = []
+
             while len(current_token_ids) < len(target_ids):
-                logging.debug(f"--- [{draft_type}_{drafter_threshold}] Speculation round {num_speculation_rounds} ---")
+                logging.debug(f"--- [{draft_type}_{drafter_threshold}_{freq_scheme}] Speculation round {num_speculation_rounds} ---")
                 current_token_ids_snapshot = copy.deepcopy(current_token_ids)
                 
                 # A. PROPOSE: Get next n speculative tokens from draft model based on current accepted prefix
@@ -423,15 +454,29 @@ for problem_id in [12]:
                     veri_freq = args.veri_freq
                 elif draft_type == "dllm":
                     
-                    if not is_dynamic_frequency:
+                    if freq_scheme == "sf":  # static frequency
                         veri_freq = args.veri_freq
                     else:  # dynamic frequency: propose up to the next rejected target token
-                        veri_freq = get_dynamic_frequency_v0(
+                        
+                        #################################
+                        # oracle freq
+                        # veri_freq = get_dynamic_frequency_v0(
+                        #     args,
+                        #     curr_seqlen=len(current_token_ids),
+                        #     output_dir_pickles=output_dir_pickles,
+                        # )
+                        #################################
+                        # simple heuristic
+                        veri_freq = get_dynamic_frequency_v1(
                             args,
                             curr_seqlen=len(current_token_ids),
-                            output_dir_pickles=output_dir_pickles,
+                            freq_so_far=freq_so_far,
+                            acc_rate_so_far=acc_rate_so_far,
                         )
-                        logging.debug(f"--- [{draft_type}_{drafter_threshold}] Speculation round {num_speculation_rounds}, veri_freq {veri_freq} ---")
+                        #################################
+                        
+                        logging.debug(f"--- [{draft_type}_{drafter_threshold}_{freq_scheme}] Speculation round {num_speculation_rounds}, veri_freq {veri_freq} ---")
+                        freq_so_far.append(veri_freq)
                     
                     if args.disable_reusing_drafter_kvs:
                         draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
@@ -515,6 +560,8 @@ for problem_id in [12]:
                 logging.debug(f"--- Speculation round {num_speculation_rounds}: acceptance rate {accepted_len / veri_freq:.2f} ({accepted_len}/{veri_freq}) ---")
                 logging.debug(f"--- Speculation round {num_speculation_rounds} num_forward_passes: {num_forward_passes} ---")
                 
+                acc_rate_so_far.append(accepted_len / veri_freq)
+                
                 # D. UPDATE
                 tokens_to_append = draft_proposal[:accepted_len] + [final_token]
                 current_token_ids.extend(tokens_to_append)
@@ -547,8 +594,8 @@ for problem_id in [12]:
         # drafted_tokens = num_speculation_rounds * args.veri_freq
         drafted_tokens = sum([x["veri_freq"] for x in pickled_data["stats_per_round"]])
         acceptance_rate = accepted_tokens / drafted_tokens
-        logging.info(f"{Colors.BOLD}--- [Problem {problem_id}, {draft_type}_{drafter_threshold}] Statistics ---{Colors.RESET}")
-        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}] Acceptance rate: {acceptance_rate * 100:.1f}% ({accepted_tokens}/{drafted_tokens}){Colors.RESET}")
+        logging.info(f"{Colors.BOLD}--- [Problem {problem_id}, {draft_type}_{drafter_threshold}_{freq_scheme}] Statistics ---{Colors.RESET}")
+        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}_{freq_scheme}] Acceptance rate: {acceptance_rate * 100:.1f}% ({accepted_tokens}/{drafted_tokens}){Colors.RESET}")
         
         # compute e2e latency speedup
         latency_draft = total_num_forward_passes * args.latency["draft_fwd_pass"]  # ms
@@ -556,8 +603,8 @@ for problem_id in [12]:
         total_tpt = latency_draft + latency_target
         avg_tpt = total_tpt / len(current_token_ids)
         speedup = args.latency["target_tpt"] / avg_tpt
-        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}] Speedup: {speedup:.2f}x (Drafter latency ratio {latency_draft / total_tpt * 100:.1f}%; Avg TPT of SD: {avg_tpt:.2f}ms){Colors.RESET}")
-        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}] Avg fwd passes/round: {total_num_forward_passes / num_speculation_rounds:.2f} ({total_num_forward_passes}/{num_speculation_rounds}) (total output tokens: {len(current_token_ids)}){Colors.RESET}")
+        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}_{freq_scheme}] Speedup: {speedup:.2f}x (Drafter latency ratio {latency_draft / total_tpt * 100:.1f}%; Avg TPT of SD: {avg_tpt:.2f}ms){Colors.RESET}")
+        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}_{freq_scheme}] Avg fwd passes/round: {total_num_forward_passes / num_speculation_rounds:.2f} ({total_num_forward_passes}/{num_speculation_rounds}) (total output tokens: {len(current_token_ids)}){Colors.RESET}")
         if draft_type == "ar" and ar_drafter_speedup is None:
             ar_drafter_speedup = speedup
         if ar_drafter_speedup is not None:
