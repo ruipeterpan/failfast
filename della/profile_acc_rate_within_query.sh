@@ -25,7 +25,7 @@ if [ "$CLUSTER" = "ravi" ]; then
     source /data2/ruipan/miniconda3/etc/profile.d/conda.sh
 elif [ "$CLUSTER" = "della" ]; then
     DATA_DIR="/scratch/gpfs/RAVIAN/rp2773/data"
-    DLLM_DIR="/hoome/rp2773/data/Fast_dLLM_v2_1.5B"
+    DLLM_DIR="/home/rp2773/data/Fast_dLLM_v2_1.5B"
     export HF_HOME="/scratch/gpfs/RAVIAN/rp2773/hf_cache"
     export HF_HUB_OFFLINE=1
     export HF_DATASETS_OFFLINE=1
