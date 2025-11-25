@@ -244,29 +244,31 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, veri
 
 
 def construct_drafter_configs(args):
-    drafter_configs = [("ar", None, "sf", None, None, None)] if args.run_ar else []
+    drafter_configs = []
+    if args.run_ar:
+        drafter_configs.extend([("ar", None, "sf", None, None, None)] )
     drafter_configs.extend([("dllm", thr, "sf", None, None, None) for thr in args.drafter_thresholds])
     # v2 sweep
-    drafter_configs.extend([("dllm", thr, "df", multiplicative_factor, lower_bound_factor, v2_lower_threshold) \
+    drafter_configs.extend([("dllm", thr, "df", multiplicative_factor, lower_bound_factor, v3_decay_factor) \
         for thr in args.drafter_thresholds \
         for multiplicative_factor in args.v1_multiplicative_factors \
         for lower_bound_factor in args.v1_lower_bound_factors \
-        for v2_lower_threshold in args.v2_lower_thresholds])
+        for v3_decay_factor in args.v3_decay_factors])
     args.drafter_configs = drafter_configs
 
 def get_dynamic_frequency(args, curr_seqlen, freq_so_far, acc_rate_so_far, output_dir_pickles,
-                          multiplicative_factor, lower_bound_factor, v2_lower_threshold):
+                          multiplicative_factor, lower_bound_factor, v3_decay_factor):
     if args.df_policy_version == 0:
         return get_dynamic_frequency_v0(args, curr_seqlen, output_dir_pickles)
     elif args.df_policy_version == 1:
         return get_dynamic_frequency_v1(args, curr_seqlen, freq_so_far, acc_rate_so_far,
                                         multiplicative_factor=multiplicative_factor,
                                         lower_bound_factor=lower_bound_factor)
-    elif args.df_policy_version == 2:
-        return get_dynamic_frequency_v2(args, curr_seqlen, freq_so_far, acc_rate_so_far,
+    elif args.df_policy_version == 3:
+        return get_dynamic_frequency_v3(args, curr_seqlen, freq_so_far, acc_rate_so_far,
                                         multiplicative_factor=multiplicative_factor,
                                         lower_bound_factor=lower_bound_factor,
-                                        v2_lower_threshold=v2_lower_threshold)
+                                        v3_decay_factor=v3_decay_factor)
     else:
         raise NotImplementedError
 
@@ -310,8 +312,40 @@ def get_dynamic_frequency_v2(args, curr_seqlen, freq_so_far, acc_rate_so_far, mu
         veri_freq = last_freq  # keep the same
     return veri_freq
 
+def get_dynamic_frequency_v3(args, curr_seqlen, freq_so_far, acc_rate_so_far, multiplicative_factor, lower_bound_factor, v3_decay_factor):
+    if curr_seqlen == 0:
+        return args.veri_freq  # first round, use default veri_freq
+    
+    num_rounds_so_far = len(freq_so_far)
+    numerator = 0.0
+    denominator = 0.0
 
-def format_drafter_name(args, draft_type, drafter_threshold, freq_scheme, multiplicative_factor, lower_bound_factor, v2_lower_threshold=None):
+    for i in range(num_rounds_so_far):
+        n_i = freq_so_far[i]        # speculation length at round i
+        a_i = acc_rate_so_far[i]    # acceptance fraction at round i
+        age = num_rounds_so_far - 1 - i             # 0 = most recent, grows older
+        
+        # weight = recency factor * speculation length
+        w_i = (v3_decay_factor ** age) * n_i
+        
+        numerator += w_i * a_i
+        denominator += w_i
+
+    if denominator == 0:
+        p_hat = 1.0    # default if no history
+    else:
+        p_hat = numerator / denominator
+    
+    last_freq = freq_so_far[-1]
+    last_acc_rate = acc_rate_so_far[-1]
+    if p_hat >= 0.8:  # easy region
+        veri_freq = min(30, int(last_freq * multiplicative_factor))  # exploratory bump
+    else: 
+        veri_freq = max(int(args.veri_freq * lower_bound_factor), int(last_freq * last_acc_rate))
+    return veri_freq
+
+
+def format_drafter_name(args, draft_type, drafter_threshold, freq_scheme, multiplicative_factor, lower_bound_factor, v3_decay_factor=None):
     if draft_type == "ar":
         return "ar_None_sf_None_None"
     
@@ -322,8 +356,10 @@ def format_drafter_name(args, draft_type, drafter_threshold, freq_scheme, multip
         return f"dllm_{drafter_threshold}_df_v0_None_None"
     elif args.df_policy_version == 1:
         return f"dllm_{drafter_threshold}_df_v1_{multiplicative_factor}_{lower_bound_factor}"
-    elif args.df_policy_version == 2:
-        return f"dllm_{drafter_threshold}_df_v2_{multiplicative_factor}_{lower_bound_factor}_{v2_lower_threshold}"
+    # elif args.df_policy_version == 2:
+    #     return f"dllm_{drafter_threshold}_df_v2_{multiplicative_factor}_{lower_bound_factor}_{v2_lower_threshold}"
+    elif args.df_policy_version == 3:
+        return f"dllm_{drafter_threshold}_df_v3_{multiplicative_factor}_{lower_bound_factor}_{v3_decay_factor}"
 
 
 # %%
@@ -360,8 +396,8 @@ parser.add_argument("--v1_multiplicative_factors", type=float, nargs="+",
 parser.add_argument("--v1_lower_bound_factors", type=float, nargs="+",
                     default=[0.75],
                     help="Lower bound factor for the frequency adjustment")
-parser.add_argument("--v2_lower_thresholds", type=float, nargs="+",
-                    default=[0.5],
+parser.add_argument("--v3_decay_factors", type=float, nargs="+",
+                    default=[0.4, 0.5, 0.6],
                     help="XXX")
 parser.add_argument('--run_ar', action='store_true', help='Run the AR drafter to compare speedups')
 parser.add_argument('--overwrite', action='store_true', help='Overwrite existing output pickles and figures')
@@ -383,6 +419,8 @@ args, _ = parser.parse_known_args()
 # args.drafter_thresholds = [0.05]
 args.target_model_name = "Qwen/Qwen2.5-7B-Instruct"  # for easier debugging
 args.dllm_dir = "/data2/ruipan/Fast_dLLM_v2_1.5B"
+args.df_policy_version = 3
+args.v3_decay_factors = [0.2, 0.15, 0.1, 0.05]
 ######custom fields for easier debugging######
 
 
@@ -449,7 +487,7 @@ for problem_id in [12]:
         logging.info(f"[Problem {problem_id}] Target (vanilla) generation length: {num_target_tokens} tokens")
     
     ar_drafter_speedup = None
-    for draft_type, drafter_threshold, freq_scheme, multiplicative_factor, lower_bound_factor, v2_lower_threshold in args.drafter_configs:
+    for draft_type, drafter_threshold, freq_scheme, multiplicative_factor, lower_bound_factor, v3_decay_factor in args.drafter_configs:
         transformers.set_seed(42)  # reproducibility for each question-model-model config pairing
         
         # set up output dirs and export
@@ -476,7 +514,7 @@ for problem_id in [12]:
             current_token_ids = pickled_data["stats_per_round"][-1]["current_token_ids"]
         else:  # run the actual spec decoding pipeline
             drafter_name = format_drafter_name(args, draft_type, drafter_threshold, freq_scheme,
-                                               multiplicative_factor, lower_bound_factor)
+                                               multiplicative_factor, lower_bound_factor, v3_decay_factor)
             logging.info(f"{Colors.BOLD}=== [Problem {problem_id}] Running drafter: {drafter_name} ==={Colors.RESET}")
             accepted_tokens = 0
             rejected_tokens = 0
@@ -520,7 +558,8 @@ for problem_id in [12]:
                                                         acc_rate_so_far=acc_rate_so_far,
                                                         output_dir_pickles=output_dir_pickles,
                                                         multiplicative_factor=multiplicative_factor,
-                                                        lower_bound_factor=lower_bound_factor)
+                                                        lower_bound_factor=lower_bound_factor,
+                                                        v3_decay_factor=v3_decay_factor,)
                         
                         logging.debug(f"--- [{drafter_name}] Speculation round {num_speculation_rounds}, veri_freq {veri_freq} ---")
                         freq_so_far.append(veri_freq)
@@ -673,7 +712,7 @@ for problem_id in [12]:
         else:
             visualize_acc_rate_over_time(stats_per_round, veri_freq=args.veri_freq, acceptance_rate=acceptance_rate, output_dir=None, filename=None)
         
-        print_sd_trajectory(pickled_data, target_tokenizer)
+        # print_sd_trajectory(pickled_data, target_tokenizer)
         
         pickled_data["num_speculation_rounds"] = num_speculation_rounds
         pickled_data["total_num_forward_passes"] = total_num_forward_passes
