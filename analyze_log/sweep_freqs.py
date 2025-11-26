@@ -125,7 +125,16 @@ if __name__ == "__main__":
     # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_23_aime.ansi"  # dLLM drafter, threshold 0.05
     
     # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_32_math.ansi"  # dLLM drafter, threshold 0.9
-    log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_31_aime.ansi"  # dLLM drafter, threshold 0.9
+    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_31_aime.ansi"  # dLLM drafter, threshold 0.9
+
+    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_02_13_math.ansi"  # dLLM drafter, threshold 0.05, more sweeps
+    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_02_14_aime.ansi"  # dLLM drafter, threshold 0.05, more sweeps
+    
+    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_00_49_math.ansi"  # dLLM drafter, threshold 0.9, more sweeps
+    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_01_55_aime.ansi"  # dLLM drafter, threshold 0.9, more sweeps
+    
+    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_22_26_math.ansi"  # lookahead dynamic frequency sweep
+    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_22_27_aime.ansi"  # lookahead dynamic frequency sweep
 
     data = parse_log(log_file)
     compute_averages_and_print(data)

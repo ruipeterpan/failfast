@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=sweep_dllm_drafter_freqs_0.9_math              # Job name
+#SBATCH --job-name=sweep_dllm_drafter_freqs_0.05_aime              # Job name
 #SBATCH --output="/home/rp2773/slurm_logs/%A.out"       # Standard output log
 #SBATCH --error="/home/rp2773/slurm_logs/%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
 #SBATCH --gres=gpu:2                        # Number of GPUs to allocate
 ##SBATCH --constraint="gpu80"
-#SBATCH --time=5:00:00                        # Time limit (24 hours max)
+#SBATCH --time=3:00:00                        # Time limit (24 hours max)
 #SBATCH --mem=20G                            # Memory allocation (adjust as needed)
 #SBATCH --mail-user=ruipan@princeton.edu  # Your email
 #SBATCH --mail-type=ALL  # Options: BEGIN, END, FAIL, REQUEUE, TIME_LIMIT, etc.
@@ -41,11 +41,12 @@ conda activate vllm_dllm
 OUTPUT_DIR="${DATA_DIR}/diffspec"
 
 # # actual run
-DATASETS=("math")  #  "aime"
+DATASETS=("aime")  #  "aime"
 NUM_QUESTIONS=30  # not useful, as we really only profile question 12
 # VERI_FREQS=(2 3 4 5 6 7 8 9 10 11 12 13)
-VERI_FREQS=(2 3 4 5 6 7 8 9 10)
-DRAFTER_THRESHOLDS=(0.9)
+# VERI_FREQS=(10 11 12 13 14 15 16 17)
+VERI_FREQS=(13 14 15 16 17 18 19 20 21 22)
+DRAFTER_THRESHOLDS=(0.05)
 # debug
 # DATASETS=("math")
 # NUM_QUESTIONS=1

@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=sweep_dynamic_freq_aime              # Job name
+#SBATCH --job-name=sweep_dynamic_freq_math_16              # Job name
 #SBATCH --output="/home/rp2773/slurm_logs/%A.out"       # Standard output log
 #SBATCH --error="/home/rp2773/slurm_logs/%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
 #SBATCH --gres=gpu:2                        # Number of GPUs to allocate
 ##SBATCH --constraint="gpu80"
-#SBATCH --time=9:00:00                        # Time limit (24 hours max)
+#SBATCH --time=6:00:00                        # Time limit (24 hours max)
 #SBATCH --mem=20G                            # Memory allocation (adjust as needed)
 #SBATCH --mail-user=ruipan@princeton.edu  # Your email
 #SBATCH --mail-type=ALL  # Options: BEGIN, END, FAIL, REQUEUE, TIME_LIMIT, etc.
@@ -41,11 +41,11 @@ conda activate vllm_dllm
 OUTPUT_DIR="${DATA_DIR}/diffspec"
 
 # # actual run
-DATASETS=("aime")  #  "aime"
+DATASETS=("math")  #  "aime"
 NUM_QUESTIONS=30
 DRAFTER_THRESHOLDS=(0.05)
-SWEEP_CONF_THRESHOLD_FOR_LOWCONF_TOKENS=(0.2 0.25 0.3 0.35 0.4 0.45)  # 0.2, 0.25, 0.3, 0.35, 0.4, 0.45
-SWEEP_NUM_TOKENS_UPPER_BOUND=(20 25 30)
+SWEEP_CONF_THRESHOLD_FOR_LOWCONF_TOKENS=(0.3 0.35 0.4 0.45)  # 0.2, 0.25, 0.3, 0.35, 0.4, 0.45
+SWEEP_NUM_TOKENS_UPPER_BOUND=(25 30 35 40 45 50)
 SWEEP_NUM_TOKENS_TO_INCREMENT=(5 7 10)
 
 timestamp=$(date +"%Y_%m_%d_%H_%M")  # equivalent of datetime.now().strftime("%Y_%m_%d_%H_%M") in python
@@ -57,7 +57,7 @@ for DATASET_NAME in "${DATASETS[@]}"; do
         --output_dir "${OUTPUT_DIR}" \
         --dllm_dir "${DLLM_DIR}" \
         --num_questions "${NUM_QUESTIONS}" \
-        --veri_freq 10 \
+        --veri_freq 16 \
         --drafter_thresholds "${DRAFTER_THRESHOLDS[@]}" \
         --sweep_conf_threshold_for_lowconf_tokens "${SWEEP_CONF_THRESHOLD_FOR_LOWCONF_TOKENS[@]}" \
         --sweep_num_tokens_upper_bound "${SWEEP_NUM_TOKENS_UPPER_BOUND[@]}" \
