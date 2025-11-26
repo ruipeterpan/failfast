@@ -314,11 +314,11 @@ args.drafter_configs = [("ar", None, thr) for thr in args.veri_freqs] if args.ru
 # args.drafter_configs.extend([("dllm", thr, veri_freq) for thr in args.drafter_thresholds for veri_freq in args.veri_freqs])
 
 dataset = get_dataset(args.dataset_name)
-# args.latency = {  # a6000, hf generate latencies
-#     "draft_fwd_pass": 28,  # ms; dLLM 1.5B drafter forward pass latency
-#     "target_tpt": 105,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
-# }
-args.latency = {  # a6000, vllm latencies (assuming dllm latency is similar to 1.5b ar)
+args.latency = {  # a6000, hf generate latencies
+    "draft_fwd_pass": 28,  # ms; dLLM 1.5B drafter forward pass latency
+    "target_tpt": 105,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
+}
+args.latency_vllm = {  # a6000, vllm latencies (assuming dllm latency is similar to 1.5b ar)
     "draft_fwd_pass": 6.1,  # ms; dLLM 1.5B drafter forward pass latency
     "target_tpt": 52.6,  # ms; Qwen2.5-32B, latency of short prefill pass (~=tpt)
 }
@@ -369,6 +369,8 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
     ar_drafter_speedup = None
     for draft_type, drafter_threshold, veri_freq in args.drafter_configs:
         transformers.set_seed(42)  # reproducibility for each question-model-model config pairing
+        
+        drafter_name = f"{draft_type}_{drafter_threshold}_{veri_freq}"
         
         # set up output dirs and export
         if draft_type == "ar":
@@ -538,21 +540,30 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
         # drafted_tokens = num_speculation_rounds * args.veri_freq
         drafted_tokens = sum([x["veri_freq"] for x in pickled_data["stats_per_round"]])
         acceptance_rate = accepted_tokens / drafted_tokens
-        logging.info(f"{Colors.BOLD}--- [Problem {problem_id}, {draft_type}_{drafter_threshold}_{veri_freq}] Statistics ---{Colors.RESET}")
-        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}_{veri_freq}] Acceptance rate: {acceptance_rate * 100:.1f}% ({accepted_tokens}/{drafted_tokens}){Colors.RESET}")
+        logging.info(f"{Colors.BOLD}--- [Problem {problem_id}, {drafter_name}] Statistics ---{Colors.RESET}")
+        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {drafter_name}] Acceptance rate: {acceptance_rate * 100:.1f}% ({accepted_tokens}/{drafted_tokens}){Colors.RESET}")
         
         # compute e2e latency speedup
+        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {drafter_name}] Avg fwd passes/round: {total_num_forward_passes / num_speculation_rounds:.2f} ({total_num_forward_passes}/{num_speculation_rounds}) (total output tokens: {len(current_token_ids)}){Colors.RESET}")
+        
         latency_draft = total_num_forward_passes * args.latency["draft_fwd_pass"]  # ms
         latency_target = num_speculation_rounds * args.latency["target_tpt"]
         total_tpt = latency_draft + latency_target
         avg_tpt = total_tpt / len(current_token_ids)
         speedup = args.latency["target_tpt"] / avg_tpt
-        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}_{veri_freq}] Speedup: {speedup:.2f}x (Drafter latency ratio {latency_draft / total_tpt * 100:.1f}%; Avg TPT of SD: {avg_tpt:.2f}ms){Colors.RESET}")
-        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}_{veri_freq}] Avg fwd passes/round: {total_num_forward_passes / num_speculation_rounds:.2f} ({total_num_forward_passes}/{num_speculation_rounds}) (total output tokens: {len(current_token_ids)}){Colors.RESET}")
+        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {drafter_name}] [HuggingFace] Speedup: {speedup:.2f}x (Drafter latency ratio {latency_draft / total_tpt * 100:.1f}%; Avg TPT of SD: {avg_tpt:.2f}ms){Colors.RESET}")
+        
         if draft_type == "ar" and ar_drafter_speedup is None:
             ar_drafter_speedup = speedup
         if ar_drafter_speedup is not None:
-            logging.info(f"{Colors.CYAN}[Problem {problem_id}, {draft_type}_{drafter_threshold}_{veri_freq}] Win over AR drafter: {speedup / ar_drafter_speedup:.3f}x.{Colors.RESET}")
+            logging.info(f"{Colors.CYAN}[Problem {problem_id}, {drafter_name}] [HuggingFace] Win over AR drafter: {speedup / ar_drafter_speedup:.3f}x.{Colors.RESET}")
+        
+        latency_draft = total_num_forward_passes * args.latency_vllm["draft_fwd_pass"]  # ms
+        latency_target = num_speculation_rounds * args.latency_vllm["target_tpt"]
+        total_tpt = latency_draft + latency_target
+        avg_tpt = total_tpt / len(current_token_ids)
+        speedup = args.latency_vllm["target_tpt"] / avg_tpt
+        logging.info(f"{Colors.CYAN}[Problem {problem_id}, {drafter_name}] [vLLM] Speedup: {speedup:.2f}x (Drafter latency ratio {latency_draft / total_tpt * 100:.1f}%; Avg TPT of SD: {avg_tpt:.2f}ms){Colors.RESET}")
 
         # save and visualize results
         stats_per_round = pickled_data["stats_per_round"]
@@ -568,11 +579,11 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
         pickled_data["accepted_tokens"] = accepted_tokens
         pickled_data["rejected_tokens"] = rejected_tokens
         
-        # if args.overwrite or (not os.path.exists(os.path.join(output_dir_pickles, f"{draft_type}_{drafter_threshold}.pickle"))):
-        #     with open(os.path.join(output_dir_pickles, f"{draft_type}_{drafter_threshold}.pickle"), "wb") as f:
-        #         pickle.dump(pickled_data, f)
-        #     with open(os.path.join(output_dir_pickles, f"{draft_type}_{drafter_threshold}.txt"), "w") as f:
-        #         pp = pprint.PrettyPrinter(width=1000, stream=f)  # large enough to fit list
-        #         pp.pprint(pickled_data)
+        if args.overwrite or (not os.path.exists(os.path.join(output_dir_pickles, f"{drafter_name}.pickle"))):
+            with open(os.path.join(output_dir_pickles, f"{drafter_name}.pickle"), "wb") as f:
+                pickle.dump(pickled_data, f)
+            with open(os.path.join(output_dir_pickles, f"{drafter_name}.txt"), "w") as f:
+                pp = pprint.PrettyPrinter(width=1000, stream=f)  # large enough to fit list
+                pp.pprint(pickled_data)
 
 # %%
