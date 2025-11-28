@@ -9,11 +9,19 @@ PROB_DRAFTER_BRACKET_RE = re.compile(r"\[Problem\s+(\d+),\s*([^\]]+)\]")
 PROB_ONLY_RE = re.compile(r"\[Problem\s+(\d+)\]")
 
 ACCEPT_RE = re.compile(r"Acceptance rate:\s*([\d.]+)%")
-FWD_RE = re.compile(r"Avg fwd passes/round:\s*([\d.]+)")
+# Capture avg forwards and optional (num_out/num_rounds)
+FWD_RE = re.compile(r"Avg fwd passes/round:\s*([\d.]+)(?:\s*\((\d+)/(\d+)\))?")
 
 # New: capture WHICH engine’s speedup it is
-HF_SPEED_RE = re.compile(r"\[HuggingFace\]\s*Speedup:\s*([\d.]+)x")
-VLLM_SPEED_RE = re.compile(r"\[vLLM\]\s*Speedup:\s*([\d.]+)x")
+HF_SPEED_RE = re.compile(r"\[HuggingFace_A6000\]\s*Speedup:\s*([\d.]+)x")
+VLLM_SPEED_RE = re.compile(r"\[vLLM_A6000\]\s*Speedup:\s*([\d.]+)x")
+
+# New: capture Accepted/speculated stats (avg and max)
+# Example line:
+# Accepted/speculated: avg 5.47/7.00, max 7/7
+ACCEPTED_SPEC_RE = re.compile(
+    r"Accepted/speculated:\s*avg\s*([\d.]+)/([\d.]+),\s*max\s*([\d.]+)/([\d.]+)"
+)
 
 
 def strip_ansi(s):
@@ -26,9 +34,28 @@ def parse_log(filename):
       data[problem_id][drafter] = {
           "hf": float or None,
           "vllm": float or None,
+          "accept_rate": float or None,           # percent (e.g., 78.2)
+          "avg_acc": float or None,               # avg accepted length
+          "avg_spec": float or None,              # avg speculated length
+          "max_acc": float or None,               # max accepted length
+          "max_spec": float or None,              # max speculated length
+          "num_rounds": int or None,              # rounds (the denominator in (num_out/num_rounds))
       }
     """
-    data = defaultdict(lambda: defaultdict(lambda: {"hf": None, "vllm": None}))
+    data = defaultdict(
+        lambda: defaultdict(
+            lambda: {
+                "hf": None,
+                "vllm": None,
+                "accept_rate": None,
+                "avg_acc": None,
+                "avg_spec": None,
+                "max_acc": None,
+                "max_spec": None,
+                "num_rounds": None,
+            }
+        )
+    )
     cur_prob = None
     cur_drafter = None
 
@@ -63,7 +90,91 @@ def parse_log(filename):
             if v:
                 data[cur_prob][cur_drafter]["vllm"] = float(v.group(1))
 
+            # Acceptance rate
+            m_acc = ACCEPT_RE.search(line)
+            if m_acc:
+                try:
+                    data[cur_prob][cur_drafter]["accept_rate"] = float(
+                        m_acc.group(1)
+                    )
+                except ValueError:
+                    pass
+
+            # Avg fwd passes/round: capture rounds if present (321/107 -> rounds=107)
+            m_fwd = FWD_RE.search(line)
+            if m_fwd:
+                # m_fwd.group(1) is avg fwd passes (we don't store it)
+                if m_fwd.group(3):
+                    try:
+                        data[cur_prob][cur_drafter]["num_rounds"] = int(
+                            m_fwd.group(3)
+                        )
+                    except ValueError:
+                        pass
+
+            # Accepted/speculated: avg X/Y, max A/B
+            m_as = ACCEPTED_SPEC_RE.search(line)
+            if m_as:
+                try:
+                    data[cur_prob][cur_drafter]["avg_acc"] = float(m_as.group(1))
+                    data[cur_prob][cur_drafter]["avg_spec"] = float(m_as.group(2))
+                    data[cur_prob][cur_drafter]["max_acc"] = float(m_as.group(3))
+                    data[cur_prob][cur_drafter]["max_spec"] = float(m_as.group(4))
+                except ValueError:
+                    pass
+
     return data
+
+
+def _format_stats_for_drafter(sums, drafter):
+    """
+    Helper that returns four formatted strings:
+      acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str
+    using the same logic for both HF and vLLM tables.
+    """
+    s = sums[drafter]
+
+    # Acceptance rate average
+    if s["acc_rate_cnt"] > 0:
+        acc_rate_avg = s["acc_rate_sum"] / s["acc_rate_cnt"]
+        acc_rate_str = f"{acc_rate_avg:.2f}%"
+    else:
+        acc_rate_str = "N/A"
+
+    # average number of rounds (rounded to nearest int)
+    if s["rounds_cnt"] > 0:
+        rounds_avg = s["rounds_sum"] / s["rounds_cnt"]
+        num_rounds_str = f"{rounds_avg:.1f}"
+    else:
+        num_rounds_str = "N/A"
+
+    # average of avg accepted/speculated lengths across problems
+    if s["avg_acc_cnt"] > 0 and s["avg_spec_cnt"] > 0:
+        avg_acc_avg = s["avg_acc_sum"] / s["avg_acc_cnt"]
+        avg_spec_avg = s["avg_spec_sum"] / s["avg_spec_cnt"]
+        avg_acc_spec_str = f"{avg_acc_avg:.2f}/{avg_spec_avg:.2f}"
+    elif s["avg_acc_cnt"] > 0:
+        avg_acc_avg = s["avg_acc_sum"] / s["avg_acc_cnt"]
+        avg_acc_spec_str = f"{avg_acc_avg:.2f}/N/A"
+    elif s["avg_spec_cnt"] > 0:
+        avg_spec_avg = s["avg_spec_sum"] / s["avg_spec_cnt"]
+        avg_acc_spec_str = f"N/A/{avg_spec_avg:.2f}"
+    else:
+        avg_acc_spec_str = "N/A"
+
+    # max of max accepted/speculated across problems
+    max_acc = s["max_acc_max"]
+    max_spec = s["max_spec_max"]
+    if max_acc is not None and max_spec is not None:
+        max_acc_spec_str = f"{max_acc:.2f}/{max_spec:.2f}"
+    elif max_acc is not None:
+        max_acc_spec_str = f"{max_acc:.2f}/N/A"
+    elif max_spec is not None:
+        max_acc_spec_str = f"N/A/{max_spec:.2f}"
+    else:
+        max_acc_spec_str = "N/A"
+
+    return acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str
 
 
 def compute_averages_and_print(data):
@@ -71,21 +182,67 @@ def compute_averages_and_print(data):
     Compute:
       - Average HF speedup per drafter
       - Average vLLM speedup per drafter
-      - Best drafter for HF
-      - Best drafter for vLLM
+      - For each drafter: average acceptance rate, average num_rounds,
+        average(avg accepted), average(avg speculated),
+        and max(max accepted), max(max speculated) across problems (when available).
+      - Print both HF and vLLM tables annotated with these stats.
     """
 
-    sums = defaultdict(lambda: {"hf_sum": 0.0, "hf_cnt": 0,
-                                "v_sum": 0.0, "v_cnt": 0})
+    sums = defaultdict(
+        lambda: {
+            "hf_sum": 0.0,
+            "hf_cnt": 0,
+            "v_sum": 0.0,
+            "v_cnt": 0,
+            # acceptance & accepted/spec stats
+            "acc_rate_sum": 0.0,
+            "acc_rate_cnt": 0,
+            "avg_acc_sum": 0.0,
+            "avg_acc_cnt": 0,
+            "avg_spec_sum": 0.0,
+            "avg_spec_cnt": 0,
+            "max_acc_max": None,
+            "max_spec_max": None,
+            # rounds
+            "rounds_sum": 0.0,
+            "rounds_cnt": 0,
+        }
+    )
 
     for pid, drafters in data.items():
         for drafter, stats in drafters.items():
-            if stats["hf"] is not None:
+            if stats.get("hf") is not None:
                 sums[drafter]["hf_sum"] += stats["hf"]
                 sums[drafter]["hf_cnt"] += 1
-            if stats["vllm"] is not None:
+            if stats.get("vllm") is not None:
                 sums[drafter]["v_sum"] += stats["vllm"]
                 sums[drafter]["v_cnt"] += 1
+
+            if stats.get("accept_rate") is not None:
+                sums[drafter]["acc_rate_sum"] += stats["accept_rate"]
+                sums[drafter]["acc_rate_cnt"] += 1
+
+            if stats.get("avg_acc") is not None:
+                sums[drafter]["avg_acc_sum"] += stats["avg_acc"]
+                sums[drafter]["avg_acc_cnt"] += 1
+
+            if stats.get("avg_spec") is not None:
+                sums[drafter]["avg_spec_sum"] += stats["avg_spec"]
+                sums[drafter]["avg_spec_cnt"] += 1
+
+            if stats.get("max_acc") is not None:
+                cur = sums[drafter]["max_acc_max"]
+                if cur is None or stats["max_acc"] > cur:
+                    sums[drafter]["max_acc_max"] = stats["max_acc"]
+
+            if stats.get("max_spec") is not None:
+                cur = sums[drafter]["max_spec_max"]
+                if cur is None or stats["max_spec"] > cur:
+                    sums[drafter]["max_spec_max"] = stats["max_spec"]
+
+            if stats.get("num_rounds") is not None:
+                sums[drafter]["rounds_sum"] += stats["num_rounds"]
+                sums[drafter]["rounds_cnt"] += 1
 
     # Compute averages
     avg_hf = {}
@@ -97,14 +254,29 @@ def compute_averages_and_print(data):
         if s["v_cnt"] > 0:
             avg_vllm[drafter] = s["v_sum"] / s["v_cnt"]
 
-    # Print results
+    # Print HF averages (now annotated)
     print("=== Average HuggingFace Speedups per Drafter ===")
     for d, v in sorted(avg_hf.items(), key=lambda x: -x[1]):
-        print(f"{d}: {v:.3f}x")
+        acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str = _format_stats_for_drafter(
+            sums, d
+        )
+        print(
+            f"{d}: {v:.3f}x, acc rate {acc_rate_str}, num rounds {num_rounds_str}, "
+            f"avg accepted/speculated: {avg_acc_spec_str}, "
+            f"max accepted/speculated: {max_acc_spec_str}"
+        )
 
+    # Print vLLM averages with the same stats
     print("\n=== Average vLLM Speedups per Drafter ===")
-    for d, v in sorted(avg_vllm.items(), key=lambda x: -x[1]):
-        print(f"{d}: {v:.3f}x")
+    for drafter, v in sorted(avg_vllm.items(), key=lambda x: -x[1]):
+        acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str = _format_stats_for_drafter(
+            sums, drafter
+        )
+        print(
+            f"{drafter}: {v:.3f}x, acc rate {acc_rate_str}, num rounds {num_rounds_str}, "
+            f"avg accepted/speculated: {avg_acc_spec_str}, "
+            f"max accepted/speculated: {max_acc_spec_str}"
+        )
 
     # Best configs
     best_hf = max(avg_hf.items(), key=lambda x: x[1]) if avg_hf else None
@@ -118,30 +290,8 @@ def compute_averages_and_print(data):
 
 
 if __name__ == "__main__":
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_07_math.ansi"  # AR drafter, MATH
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_11_aime.ansi"  # AR drafter, AIME
-    
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_23_math.ansi"  # dLLM drafter, threshold 0.05
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_23_aime.ansi"  # dLLM drafter, threshold 0.05
-    
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_32_math.ansi"  # dLLM drafter, threshold 0.9
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_21_31_aime.ansi"  # dLLM drafter, threshold 0.9
-
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_02_13_math.ansi"  # dLLM drafter, threshold 0.05, more sweeps
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_02_14_aime.ansi"  # dLLM drafter, threshold 0.05, more sweeps
-    
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_00_49_math.ansi"  # dLLM drafter, threshold 0.9, more sweeps
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_01_55_aime.ansi"  # dLLM drafter, threshold 0.9, more sweeps
-    
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_22_26_math.ansi"  # lookahead dynamic frequency sweep
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_25_22_27_aime.ansi"  # lookahead dynamic frequency sweep
-
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_13_42_math.ansi"  # lookahead dynamic frequency sweep
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_13_52_aime.ansi"  # lookahead dynamic frequency sweep (incomplete--only managed to run 20 problems)
-    log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_27_16_13_aime.ansi"  # lookahead dynamic frequency sweep (redid the above one)
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_14_37_math.ansi"  # lookahead dynamic frequency sweep, baseline freq is 16
-    # log_file = "/scratch/gpfs/RAVIAN/rp2773/data/diffspec/logs/2025_11_26_14_34_aime.ansi"  # lookahead dynamic frequency sweep, baseline freq is 16
-
+    # (same commented log_file options as before)
+    log_file = "/data2/ruipan/diffspec/logs/2025_11_28_11_44_math.ansi"  # adjust as needed
 
     data = parse_log(log_file)
     compute_averages_and_print(data)

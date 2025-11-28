@@ -281,6 +281,7 @@ args.target_model_name_clean = args.target_model_name.split("/", 1)[1]
 
 ######custom fields for easier debugging######
 # args.log_level = "DEBUG"
+# args.dataset_name = "gpqa"
 # args.overwrite = True
 # args.max_new_tokens = 1024
 # args.run_ar = True
