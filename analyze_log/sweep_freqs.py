@@ -2,7 +2,7 @@
 import re
 from collections import defaultdict
 
-# --- Regex patterns (same as original) ---
+# --- Regex patterns ---
 ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 RUNNING_RE = re.compile(r"Running drafter:\s*(\S+)")
 PROB_DRAFTER_BRACKET_RE = re.compile(r"\[Problem\s+(\d+),\s*([^\]]+)\]")
@@ -12,13 +12,12 @@ ACCEPT_RE = re.compile(r"Acceptance rate:\s*([\d.]+)%")
 # Capture avg forwards and optional (num_out/num_rounds)
 FWD_RE = re.compile(r"Avg fwd passes/round:\s*([\d.]+)(?:\s*\((\d+)/(\d+)\))?")
 
-# New: capture WHICH engine’s speedup it is
-HF_SPEED_RE = re.compile(r"\[HuggingFace_A6000\]\s*Speedup:\s*([\d.]+)x")
-VLLM_SPEED_RE = re.compile(r"\[vLLM_A6000\]\s*Speedup:\s*([\d.]+)x")
+# Generic engine speedup capture:
+# captures engine name inside brackets and the speedup number
+# e.g. "[HuggingFace_A6000] Speedup: 2.26x" -> engine="HuggingFace_A6000", speed="2.26"
+ENGINE_SPEED_RE = re.compile(r"\[([^\]]+)\]\s*Speedup:\s*([\d.]+)x")
 
-# New: capture Accepted/speculated stats (avg and max)
-# Example line:
-# Accepted/speculated: avg 5.47/7.00, max 7/7
+# Accepted/speculated: avg X/Y, max A/B
 ACCEPTED_SPEC_RE = re.compile(
     r"Accepted/speculated:\s*avg\s*([\d.]+)/([\d.]+),\s*max\s*([\d.]+)/([\d.]+)"
 )
@@ -32,8 +31,7 @@ def parse_log(filename):
     """
     Returns:
       data[problem_id][drafter] = {
-          "hf": float or None,
-          "vllm": float or None,
+          "engines": { engine_name: speed_float, ... },
           "accept_rate": float or None,           # percent (e.g., 78.2)
           "avg_acc": float or None,               # avg accepted length
           "avg_spec": float or None,              # avg speculated length
@@ -45,8 +43,7 @@ def parse_log(filename):
     data = defaultdict(
         lambda: defaultdict(
             lambda: {
-                "hf": None,
-                "vllm": None,
+                "engines": {},
                 "accept_rate": None,
                 "avg_acc": None,
                 "avg_spec": None,
@@ -81,14 +78,15 @@ def parse_log(filename):
             if cur_prob is None or cur_drafter is None:
                 continue
 
-            # Extract engine-specific speedups
-            hf = HF_SPEED_RE.search(line)
-            if hf:
-                data[cur_prob][cur_drafter]["hf"] = float(hf.group(1))
-
-            v = VLLM_SPEED_RE.search(line)
-            if v:
-                data[cur_prob][cur_drafter]["vllm"] = float(v.group(1))
+            # Generic engine speedup lines
+            m_eng = ENGINE_SPEED_RE.search(line)
+            if m_eng:
+                engine = m_eng.group(1)
+                try:
+                    speed = float(m_eng.group(2))
+                    data[cur_prob][cur_drafter]["engines"][engine] = speed
+                except ValueError:
+                    pass
 
             # Acceptance rate
             m_acc = ACCEPT_RE.search(line)
@@ -103,7 +101,6 @@ def parse_log(filename):
             # Avg fwd passes/round: capture rounds if present (321/107 -> rounds=107)
             m_fwd = FWD_RE.search(line)
             if m_fwd:
-                # m_fwd.group(1) is avg fwd passes (we don't store it)
                 if m_fwd.group(3):
                     try:
                         data[cur_prob][cur_drafter]["num_rounds"] = int(
@@ -128,20 +125,18 @@ def parse_log(filename):
 
 def _format_stats_for_drafter(sums, drafter):
     """
-    Helper that returns four formatted strings:
-      acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str
-    using the same logic for both HF and vLLM tables.
+    Returns: acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str
     """
     s = sums[drafter]
 
     # Acceptance rate average
     if s["acc_rate_cnt"] > 0:
         acc_rate_avg = s["acc_rate_sum"] / s["acc_rate_cnt"]
-        acc_rate_str = f"{acc_rate_avg:.2f}%"
+        acc_rate_str = f"{acc_rate_avg:.1f}%"
     else:
         acc_rate_str = "N/A"
 
-    # average number of rounds (rounded to nearest int)
+    # average number of rounds (float with one decimal)
     if s["rounds_cnt"] > 0:
         rounds_avg = s["rounds_sum"] / s["rounds_cnt"]
         num_rounds_str = f"{rounds_avg:.1f}"
@@ -152,13 +147,13 @@ def _format_stats_for_drafter(sums, drafter):
     if s["avg_acc_cnt"] > 0 and s["avg_spec_cnt"] > 0:
         avg_acc_avg = s["avg_acc_sum"] / s["avg_acc_cnt"]
         avg_spec_avg = s["avg_spec_sum"] / s["avg_spec_cnt"]
-        avg_acc_spec_str = f"{avg_acc_avg:.2f}/{avg_spec_avg:.2f}"
+        avg_acc_spec_str = f"{avg_acc_avg:.1f}/{avg_spec_avg:.1f}"
     elif s["avg_acc_cnt"] > 0:
         avg_acc_avg = s["avg_acc_sum"] / s["avg_acc_cnt"]
-        avg_acc_spec_str = f"{avg_acc_avg:.2f}/N/A"
+        avg_acc_spec_str = f"{avg_acc_avg:.1f}/N/A"
     elif s["avg_spec_cnt"] > 0:
         avg_spec_avg = s["avg_spec_sum"] / s["avg_spec_cnt"]
-        avg_acc_spec_str = f"N/A/{avg_spec_avg:.2f}"
+        avg_acc_spec_str = f"N/A/{avg_spec_avg:.1f}"
     else:
         avg_acc_spec_str = "N/A"
 
@@ -166,11 +161,11 @@ def _format_stats_for_drafter(sums, drafter):
     max_acc = s["max_acc_max"]
     max_spec = s["max_spec_max"]
     if max_acc is not None and max_spec is not None:
-        max_acc_spec_str = f"{max_acc:.2f}/{max_spec:.2f}"
+        max_acc_spec_str = f"{max_acc:.1f}/{max_spec:.1f}"
     elif max_acc is not None:
-        max_acc_spec_str = f"{max_acc:.2f}/N/A"
+        max_acc_spec_str = f"{max_acc:.1f}/N/A"
     elif max_spec is not None:
-        max_acc_spec_str = f"N/A/{max_spec:.2f}"
+        max_acc_spec_str = f"N/A/{max_spec:.1f}"
     else:
         max_acc_spec_str = "N/A"
 
@@ -179,21 +174,14 @@ def _format_stats_for_drafter(sums, drafter):
 
 def compute_averages_and_print(data):
     """
-    Compute:
-      - Average HF speedup per drafter
-      - Average vLLM speedup per drafter
-      - For each drafter: average acceptance rate, average num_rounds,
-        average(avg accepted), average(avg speculated),
-        and max(max accepted), max(max speculated) across problems (when available).
-      - Print both HF and vLLM tables annotated with these stats.
+    Aggregate per-drafter sums, compute per-engine averages, and print
+    annotated tables for each engine plus best-drafter-per-engine summary.
     """
 
+    # sums per drafter; store per-engine sums under "engines"
     sums = defaultdict(
         lambda: {
-            "hf_sum": 0.0,
-            "hf_cnt": 0,
-            "v_sum": 0.0,
-            "v_cnt": 0,
+            "engines": {},  # engine -> {"sum": float, "cnt": int}
             # acceptance & accepted/spec stats
             "acc_rate_sum": 0.0,
             "acc_rate_cnt": 0,
@@ -209,14 +197,16 @@ def compute_averages_and_print(data):
         }
     )
 
+    # Fill sums
     for pid, drafters in data.items():
         for drafter, stats in drafters.items():
-            if stats.get("hf") is not None:
-                sums[drafter]["hf_sum"] += stats["hf"]
-                sums[drafter]["hf_cnt"] += 1
-            if stats.get("vllm") is not None:
-                sums[drafter]["v_sum"] += stats["vllm"]
-                sums[drafter]["v_cnt"] += 1
+            # engines: dynamic
+            for engine, speed in stats.get("engines", {}).items():
+                ed = sums[drafter]["engines"].setdefault(
+                    engine, {"sum": 0.0, "cnt": 0}
+                )
+                ed["sum"] += speed
+                ed["cnt"] += 1
 
             if stats.get("accept_rate") is not None:
                 sums[drafter]["acc_rate_sum"] += stats["accept_rate"]
@@ -244,54 +234,46 @@ def compute_averages_and_print(data):
                 sums[drafter]["rounds_sum"] += stats["num_rounds"]
                 sums[drafter]["rounds_cnt"] += 1
 
-    # Compute averages
-    avg_hf = {}
-    avg_vllm = {}
-
+    # Discover all engines
+    engine_set = set()
     for drafter, s in sums.items():
-        if s["hf_cnt"] > 0:
-            avg_hf[drafter] = s["hf_sum"] / s["hf_cnt"]
-        if s["v_cnt"] > 0:
-            avg_vllm[drafter] = s["v_sum"] / s["v_cnt"]
+        engine_set.update(s["engines"].keys())
 
-    # Print HF averages (now annotated)
-    print("=== Average HuggingFace Speedups per Drafter ===")
-    for d, v in sorted(avg_hf.items(), key=lambda x: -x[1]):
-        acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str = _format_stats_for_drafter(
-            sums, d
-        )
-        print(
-            f"{d}: {v:.3f}x, acc rate {acc_rate_str}, num rounds {num_rounds_str}, "
-            f"avg accepted/speculated: {avg_acc_spec_str}, "
-            f"max accepted/speculated: {max_acc_spec_str}"
-        )
+    # Build avg maps per engine: engine -> { drafter: avg_speed }
+    avg_per_engine = {}
+    for engine in sorted(engine_set):
+        mapper = {}
+        for drafter, s in sums.items():
+            ed = s["engines"].get(engine)
+            if ed and ed["cnt"] > 0:
+                mapper[drafter] = ed["sum"] / ed["cnt"]
+        if mapper:
+            avg_per_engine[engine] = mapper
 
-    # Print vLLM averages with the same stats
-    print("\n=== Average vLLM Speedups per Drafter ===")
-    for drafter, v in sorted(avg_vllm.items(), key=lambda x: -x[1]):
-        acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str = _format_stats_for_drafter(
-            sums, drafter
-        )
-        print(
-            f"{drafter}: {v:.3f}x, acc rate {acc_rate_str}, num rounds {num_rounds_str}, "
-            f"avg accepted/speculated: {avg_acc_spec_str}, "
-            f"max accepted/speculated: {max_acc_spec_str}"
-        )
+    # Print per-engine tables
+    for engine, mapper in avg_per_engine.items():
+        print(f"=== Average {engine} Speedups per Drafter ===")
+        for drafter, avg_speed in sorted(mapper.items(), key=lambda x: -x[1]):
+            acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str = _format_stats_for_drafter(
+                sums, drafter
+            )
+            print(
+                f"{drafter}: {avg_speed:.3f}x, acc rate {acc_rate_str}, num rounds {num_rounds_str}, "
+                f"avg accepted/speculated: {avg_acc_spec_str}, "
+                f"max accepted/speculated: {max_acc_spec_str}"
+            )
+        print()  # blank line between engine tables
 
-    # Best configs
-    best_hf = max(avg_hf.items(), key=lambda x: x[1]) if avg_hf else None
-    best_v = max(avg_vllm.items(), key=lambda x: x[1]) if avg_vllm else None
-
-    print("\n=== Best Drafter Configs ===")
-    if best_hf:
-        print(f"Best HuggingFace Drafter: {best_hf[0]} ({best_hf[1]:.3f}x)")
-    if best_v:
-        print(f"Best vLLM Drafter: {best_v[0]} ({best_v[1]:.3f}x)")
+    # Best configs per engine
+    print("=== Best Drafter Configs ===")
+    for engine, mapper in avg_per_engine.items():
+        best = max(mapper.items(), key=lambda x: x[1])
+        print(f"Best {engine} Drafter: {best[0]} ({best[1]:.3f}x)")
 
 
 if __name__ == "__main__":
-    # (same commented log_file options as before)
-    log_file = "/data2/ruipan/diffspec/logs/2025_11_28_11_44_math.ansi"  # adjust as needed
+    # adjust log_file path as needed
+    log_file = "/data2/ruipan/diffspec/logs/2025_11_28_11_44_math.ansi"
 
     data = parse_log(log_file)
     compute_averages_and_print(data)
