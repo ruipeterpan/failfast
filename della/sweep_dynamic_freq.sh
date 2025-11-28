@@ -54,7 +54,7 @@ for DATASET_NAME in "${DATASETS[@]}"; do
     echo "Dataset ${DATASET_NAME} timestamp: ${timestamp}"
     logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}.ansi"
 
-    while [ -f "$logfile" ]; then
+    while [ -f "$logfile" ]; do
         echo "Log file ${logfile} exists. Sleeping 60 seconds and retaking timestamp..."
         sleep 60
         timestamp=$(date +"%Y_%m_%d_%H_%M")
