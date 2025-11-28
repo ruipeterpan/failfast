@@ -372,7 +372,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
     for drafter_config in args.drafter_configs:
         transformers.set_seed(42)  # reproducibility for each question-model-model config pair
         draft_type, drafter_threshold, freq_scheme, lowconf_threshold, max_spec_len, incr_len = drafter_config
-        drafter_name = format_drafter_name(drafter_config)
+        drafter_name = format_drafter_name(args, drafter_config)
         
         # set up output dirs and export
         output_dir_pickles, output_dir_figures = get_output_dir(args, str(problem_id), drafter_config)
