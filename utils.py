@@ -82,7 +82,7 @@ def populate_dataset(args):
         dataset = load_dataset("HuggingFaceH4/MATH-500")["test"]
     elif args.dataset_name == "gpqa":
         if os.getenv("HF_HUB_OFFLINE", "0") == "1":
-            dataset = load_from_disk("/scratch/gpfs/rp2773/hf_cache/datasets/gpqa")
+            dataset = load_from_disk("/scratch/gpfs/RAVIAN/rp2773/hf_cache/datasets/gpqa")
         else:    
             dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond")["train"]
     else:

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=sweep_ar_math              # Job name
+#SBATCH --job-name=sweep_ar_gpqa              # Job name
 #SBATCH --output="/home/rp2773/slurm_logs/%A.out"       # Standard output log
 #SBATCH --error="/home/rp2773/slurm_logs/%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
@@ -40,7 +40,7 @@ conda activate vllm_dllm
 
 OUTPUT_DIR="${DATA_DIR}/diffspec"
 
-DATASETS=("math")  #  "aime"
+DATASETS=("gpqa")  #  "aime"
 NUM_QUESTIONS=30
 DRAFTER_THRESHOLDS=(0.05)
 VERI_FREQS=(3 4 5 6 7 8 9 10)
@@ -50,7 +50,7 @@ for DATASET_NAME in "${DATASETS[@]}"; do
     echo "Dataset ${DATASET_NAME} timestamp: ${timestamp}"
     logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}.ansi"
 
-    while [ -f "$logfile" ]; then
+    while [ -f "$logfile" ]; do
         echo "Log file ${logfile} exists. Sleeping 60 seconds and retaking timestamp..."
         sleep 60
         timestamp=$(date +"%Y_%m_%d_%H_%M")
