@@ -17,6 +17,9 @@ FWD_RE = re.compile(r"Avg fwd passes/round:\s*([\d.]+)(?:\s*\((\d+)/(\d+)\))?")
 # e.g. "[HuggingFace_A6000] Speedup: 2.26x" -> engine="HuggingFace_A6000", speed="2.26"
 ENGINE_SPEED_RE = re.compile(r"\[([^\]]+)\]\s*Speedup:\s*([\d.]+)x")
 
+# Capture the latency pair like "2903.6ms/6480.4ms"
+LATENCY_PAIR_RE = re.compile(r"([\d.]+)ms/([\d.]+)ms")
+
 # Accepted/speculated: avg X/Y, max A/B
 ACCEPTED_SPEC_RE = re.compile(
     r"Accepted/speculated:\s*avg\s*([\d.]+)/([\d.]+),\s*max\s*([\d.]+)/([\d.]+)"
@@ -31,13 +34,13 @@ def parse_log(filename):
     """
     Returns:
       data[problem_id][drafter] = {
-          "engines": { engine_name: speed_float, ... },
-          "accept_rate": float or None,           # percent (e.g., 78.2)
-          "avg_acc": float or None,               # avg accepted length
-          "avg_spec": float or None,              # avg speculated length
-          "max_acc": float or None,               # max accepted length
-          "max_spec": float or None,              # max speculated length
-          "num_rounds": int or None,              # rounds (the denominator in (num_out/num_rounds))
+          "engines": { engine_name: {"speed": float or None, "spec_ms": float or None, "total_ms": float or None}, ... },
+          "accept_rate": float or None,
+          "avg_acc": float or None,
+          "avg_spec": float or None,
+          "max_acc": float or None,
+          "max_spec": float or None,
+          "num_rounds": int or None,
       }
     """
     data = defaultdict(
@@ -78,15 +81,28 @@ def parse_log(filename):
             if cur_prob is None or cur_drafter is None:
                 continue
 
-            # Generic engine speedup lines
+            # Generic engine speedup lines (may appear multiple engines)
             m_eng = ENGINE_SPEED_RE.search(line)
             if m_eng:
                 engine = m_eng.group(1)
                 try:
                     speed = float(m_eng.group(2))
-                    data[cur_prob][cur_drafter]["engines"][engine] = speed
                 except ValueError:
-                    pass
+                    speed = None
+
+                # default engine entry for this problem/drafter
+                ed = {"speed": speed, "spec_ms": None, "total_ms": None}
+
+                # try to capture latency pair on the same line
+                m_lat = LATENCY_PAIR_RE.search(line)
+                if m_lat:
+                    try:
+                        ed["spec_ms"] = float(m_lat.group(1))
+                        ed["total_ms"] = float(m_lat.group(2))
+                    except ValueError:
+                        pass
+
+                data[cur_prob][cur_drafter]["engines"][engine] = ed
 
             # Acceptance rate
             m_acc = ACCEPT_RE.search(line)
@@ -174,14 +190,14 @@ def _format_stats_for_drafter(sums, drafter):
 
 def compute_averages_and_print(data):
     """
-    Aggregate per-drafter sums, compute per-engine averages, and print
-    annotated tables for each engine plus best-drafter-per-engine summary.
+    Aggregate per-drafter sums, compute per-engine averages (including latencies),
+    and print annotated tables for each engine plus best-drafter-per-engine summary.
     """
 
     # sums per drafter; store per-engine sums under "engines"
     sums = defaultdict(
         lambda: {
-            "engines": {},  # engine -> {"sum": float, "cnt": int}
+            "engines": {},  # engine -> dict with speed/spec/total sums and counts
             # acceptance & accepted/spec stats
             "acc_rate_sum": 0.0,
             "acc_rate_cnt": 0,
@@ -201,12 +217,33 @@ def compute_averages_and_print(data):
     for pid, drafters in data.items():
         for drafter, stats in drafters.items():
             # engines: dynamic
-            for engine, speed in stats.get("engines", {}).items():
+            for engine, eng_stats in stats.get("engines", {}).items():
                 ed = sums[drafter]["engines"].setdefault(
-                    engine, {"sum": 0.0, "cnt": 0}
+                    engine,
+                    {
+                        "speed_sum": 0.0,
+                        "speed_cnt": 0,
+                        "spec_sum": 0.0,
+                        "spec_cnt": 0,
+                        "total_sum": 0.0,
+                        "total_cnt": 0,
+                    },
                 )
-                ed["sum"] += speed
-                ed["cnt"] += 1
+                # speed
+                sp = eng_stats.get("speed")
+                if sp is not None:
+                    ed["speed_sum"] += sp
+                    ed["speed_cnt"] += 1
+                # spec latency
+                spec = eng_stats.get("spec_ms")
+                if spec is not None:
+                    ed["spec_sum"] += spec
+                    ed["spec_cnt"] += 1
+                # total latency
+                tot = eng_stats.get("total_ms")
+                if tot is not None:
+                    ed["total_sum"] += tot
+                    ed["total_cnt"] += 1
 
             if stats.get("accept_rate") is not None:
                 sums[drafter]["acc_rate_sum"] += stats["accept_rate"]
@@ -239,26 +276,52 @@ def compute_averages_and_print(data):
     for drafter, s in sums.items():
         engine_set.update(s["engines"].keys())
 
-    # Build avg maps per engine: engine -> { drafter: avg_speed }
+    # Build avg maps per engine: engine -> { drafter: {avg_speed, avg_spec, avg_total} }
     avg_per_engine = {}
     for engine in sorted(engine_set):
         mapper = {}
         for drafter, s in sums.items():
             ed = s["engines"].get(engine)
-            if ed and ed["cnt"] > 0:
-                mapper[drafter] = ed["sum"] / ed["cnt"]
+            if not ed:
+                continue
+            avg_speed = ed["speed_sum"] / ed["speed_cnt"] if ed["speed_cnt"] > 0 else None
+            avg_spec = ed["spec_sum"] / ed["spec_cnt"] if ed["spec_cnt"] > 0 else None
+            avg_total = ed["total_sum"] / ed["total_cnt"] if ed["total_cnt"] > 0 else None
+            # Only include drafter if it has at least a speed measurement for ordering; include None stats too.
+            if avg_speed is not None:
+                mapper[drafter] = {
+                    "avg_speed": avg_speed,
+                    "avg_spec": avg_spec,
+                    "avg_total": avg_total,
+                }
         if mapper:
             avg_per_engine[engine] = mapper
 
     # Print per-engine tables
     for engine, mapper in avg_per_engine.items():
         print(f"=== Average {engine} Speedups per Drafter ===")
-        for drafter, avg_speed in sorted(mapper.items(), key=lambda x: -x[1]):
+        for drafter, info in sorted(mapper.items(), key=lambda x: -x[1]["avg_speed"]):
+            avg_speed = info["avg_speed"]
+            avg_spec = info.get("avg_spec")
+            avg_total = info.get("avg_total")
+            # compute verification latency if possible
+            if (avg_spec is not None) and (avg_total is not None):
+                avg_verify = avg_total - avg_spec
+            else:
+                avg_verify = None
+
             acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str = _format_stats_for_drafter(
                 sums, drafter
             )
+
+            # latency strings
+            spec_str = f"{avg_spec:.1f}ms" if avg_spec is not None else "N/A"
+            total_str = f"{avg_total:.1f}ms" if avg_total is not None else "N/A"
+            verify_str = f"{avg_verify:.1f}ms" if avg_verify is not None else "N/A"
+
             print(
                 f"{drafter}: {avg_speed:.3f}x, acc rate {acc_rate_str}, num rounds {num_rounds_str}, "
+                f"spec latency {spec_str}, verify latency {verify_str}, total latency {total_str}, "
                 f"avg accepted/speculated: {avg_acc_spec_str}, "
                 f"max accepted/speculated: {max_acc_spec_str}"
             )
@@ -267,22 +330,30 @@ def compute_averages_and_print(data):
     # Best configs per engine
     print("=== Best Drafter Configs ===")
     for engine, mapper in avg_per_engine.items():
-        best = max(mapper.items(), key=lambda x: x[1])
-        print(f"Best {engine} Drafter: {best[0]} ({best[1]:.3f}x)")
+        best = max(mapper.items(), key=lambda x: x[1]["avg_speed"])
+        print(f"Best {engine} Drafter: {best[0]} ({best[1]['avg_speed']:.3f}x)")
 
 
 if __name__ == "__main__":
     # AR drafters
     # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_11_44_math.ansi"
     # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_11_48_aime.ansi"
+    # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_11_14_gpqa.ansi"
     
     # dLLM 0.9
     # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_12_47_math.ansi"
     # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_12_50_aime.ansi"
+    # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_11_19_gpqa.ansi"
     
     # dLLM 0.05
     # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_15_00_math.ansi"
-    log_file = "/data2/ruipan/diffspec/logs/2025_11_28_15_04_aime.ansi"
+    # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_15_04_aime.ansi"
+    
+    # FailFast (vLLM: dllm_0.05_df_0.4_60_10)
+    # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_13_31_math.ansi"
+    # log_file = "/data2/ruipan/diffspec/logs/2025_11_28_13_31_aime.ansi"
+    log_file = "/data2/ruipan/diffspec/logs/2025_11_28_13_16_gpqa.ansi"
+    
 
     data = parse_log(log_file)
     compute_averages_and_print(data)

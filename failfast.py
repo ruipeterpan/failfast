@@ -264,7 +264,7 @@ parser.add_argument("--sweep_lowconf_threshold", type=float, nargs="+",
                     default=[0.4],
                     help="XXX")
 parser.add_argument("--sweep_max_spec_len", type=int, nargs="+",
-                    default=[50],
+                    default=[60],
                     help="XXX")
 parser.add_argument("--sweep_incr_len", type=int, nargs="+",
                     default=[10],
@@ -280,11 +280,13 @@ args.target_model_name_clean = args.target_model_name.split("/", 1)[1]
 
 
 ######custom fields for easier debugging######
-# args.log_level = "DEBUG"
+args.log_level = "DEBUG"
 # args.dataset_name = "gpqa"
 # args.overwrite = True
 # args.max_new_tokens = 1024
 # args.run_ar = True
+# args.baseline_sweep = True
+# args.spec_len = 8
 # args.run_dllm_sf = True
 # args.read_pickle = True  # XXX: read trajectory from pickle as well in future debugging
 # args.target_model_name = "Qwen/Qwen2.5-7B-Instruct"  # for easier debugging
@@ -351,7 +353,7 @@ if not args.read_pickle:
 
 # %%
 for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
-# for problem_id in [12]:
+# for problem_id in [2]:
     transformers.set_seed(42)  # reproducibility for each question-model-model config pair
     problem, options = format_problem_and_options(args, problem_id)
     messages = [

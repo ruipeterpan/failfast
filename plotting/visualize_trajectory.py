@@ -7,9 +7,7 @@ import pickle
 from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-
-import html
-import os
+from playwright.sync_api import sync_playwright
 
 def save_sd_trajectory_html(pickled_data, tokenizer, filename="trajectory.html", font_family="monospace"):
     """
@@ -195,6 +193,9 @@ def save_sd_trajectory_html(pickled_data, tokenizer, filename="trajectory.html",
                       f'title="ID: {tid}">{safe_text}</span>')
             
             color_idx += 1
+        
+            print(f"Text {text} rendered with class '{css_class}'")
+        
         return spans
 
     for round_id, round_data in enumerate(stats_each_round):
@@ -483,26 +484,6 @@ def save_sd_accepted_trajectory_html(pickled_data, tokenizer, filename="accepted
     
     print(f"Accepted token visualization saved to: {os.path.abspath(filename)}")
 
-
-
-
-# --- Usage Example ---
-# Assuming you have `data` (pickled_data) and `tokenizer` loaded:
-# save_sd_trajectory_html(data, tokenizer)
-with open("/home/ruipan/data2/diffspec/pickles/Qwen2.5-32B-Instruct/math/0/ar_None_sf_10/1024.pickle", "rb") as f:
-    pickled_data = pickle.load(f)
-
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
-save_sd_trajectory_html(pickled_data, tokenizer)
-save_sd_accepted_trajectory_html(pickled_data, tokenizer)
-
-
-# %%
-
-
-from playwright.sync_api import sync_playwright
-import os
-
 def convert_html_to_cropped_pdf(html_filepath, pdf_filepath):
     """
     Opens the HTML file, removes all margins via CSS injection,
@@ -562,14 +543,30 @@ def convert_html_to_cropped_pdf(html_filepath, pdf_filepath):
             print("Error: Could not find .container element.")
             
         browser.close()
-# --- Usage ---
-# convert_html_to_cropped_pdf("trajectory.html", "trajectory_figure.pdf")
-# --- Usage Example ---
-# Generate your HTML first
-# save_sd_trajectory_html(data, tokenizer, "trajectory.html")
+
+
+
+# %%
+data_dir = "/data2/ruipan/diffspec" 
+pickle_filename = "pickles/Qwen2.5-32B-Instruct/math/2/dllm_0.05_df_0.4_60_10/1024.pickle"
+# pickle_filename = "pickles/Qwen2.5-32B-Instruct/math/2/ar_None_sf_8/1024.pickle"
+pickle_fullpath = os.path.join(data_dir, pickle_filename)
+
+
+
+
+html_pdf_dir = pickle_fullpath.replace("pickles", "html_pdf")
+if not os.path.exists(os.path.dirname(html_pdf_dir)):
+    os.makedirs(os.path.dirname(html_pdf_dir), exist_ok=True)
+    
+with open(pickle_fullpath, "rb") as f:
+    pickled_data = pickle.load(f)
+
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
+save_sd_trajectory_html(pickled_data, tokenizer, filename=html_pdf_dir.replace(".pickle", "_trajectory.html"))
+save_sd_accepted_trajectory_html(pickled_data, tokenizer, filename=html_pdf_dir.replace(".pickle", "_accepted_trajectory.html"))
 
 # Then convert it
-convert_html_to_cropped_pdf("trajectory.html", "trajectory_figure.pdf")
-convert_html_to_cropped_pdf("accepted_trajectory.html", "accepted_trajectory_figure.pdf")
-
+convert_html_to_cropped_pdf(html_pdf_dir.replace(".pickle", "_trajectory.html"), html_pdf_dir.replace(".pickle", "_trajectory_figure.pdf"))
+convert_html_to_cropped_pdf(html_pdf_dir.replace(".pickle", "_accepted_trajectory.html"), html_pdf_dir.replace(".pickle", "_accepted_trajectory_figure.pdf"))
 # %%
