@@ -280,7 +280,7 @@ args.target_model_name_clean = args.target_model_name.split("/", 1)[1]
 
 
 ######custom fields for easier debugging######
-args.log_level = "DEBUG"
+# args.log_level = "DEBUG"
 # args.dataset_name = "gpqa"
 # args.overwrite = True
 # args.max_new_tokens = 1024
@@ -316,6 +316,8 @@ args.latency = {  # all in ms
     "vLLM_A6000": {
         "draft_fwd_pass": 6.1,
         "target_tpt": {
+            "Qwen2.5-7B-Instruct": 13.5,
+            "Qwen2.5-14B-Instruct": 24.7,
             "Qwen2.5-32B-Instruct": 52.6,
         },
     },

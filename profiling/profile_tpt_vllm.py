@@ -5,6 +5,10 @@ import openai
 from openai import OpenAI
 from datasets import load_dataset, load_from_disk
 
+"""
+VLLM_USE_V1=0 vllm serve Qwen/Qwen2.5-7B-Instruct --dtype auto -tp 2 --max_model_len 8192 --gpu-memory-utilization 0.8 --port 30000
+"""
+
 port = 30000
 client = OpenAI(
     api_key="EMPTY",
@@ -42,7 +46,8 @@ else:
 total_time = 0
 total_output_tokens = 0
 
-for problem_id in range(1):
+# for problem_id in range(1):
+for problem_id in range(30):
     if dataset_name == "aime":
         problem = dataset["problem"][problem_id]
         options = None
