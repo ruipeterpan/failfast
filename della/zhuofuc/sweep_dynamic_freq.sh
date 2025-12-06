@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=sweep_lookahead_mmlu              # Job name
-#SBATCH --output="./slurm_logs/sweep_lookahead_mmlu_%A.out"       # Standard output log
-#SBATCH --error="./slurm_logs/sweep_lookahead_mmlu_%A.err"         # Standard error log
+#SBATCH --job-name=sweep_lookahead              # Job name
+#SBATCH --output="./slurm_logs/sweep_lookahead_%A.out"       # Standard output log
+#SBATCH --error="./slurm_logs/sweep_lookahead_%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
 #SBATCH --gres=gpu:2                        # Number of GPUs to allocate
@@ -39,13 +39,13 @@ SWEEP_incr_len=(10)
 for DATASET_NAME in "${DATASETS[@]}"; do
     timestamp=$(date +"%Y_%m_%d_%H_%M")  # equivalent of datetime.now().strftime("%Y_%m_%d_%H_%M") in python
     echo "Dataset ${DATASET_NAME} timestamp: ${timestamp}"
-    logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}.ansi"
+    logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}_ff.ansi"
 
     while [ -f "$logfile" ]; do
         echo "Log file ${logfile} exists. Sleeping 60 seconds and retaking timestamp..."
         sleep 60
         timestamp=$(date +"%Y_%m_%d_%H_%M")
-        logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}.ansi"
+        logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}_ff.ansi"
     done
 
     python failfast.py \

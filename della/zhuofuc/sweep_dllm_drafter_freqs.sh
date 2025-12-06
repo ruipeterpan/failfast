@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=sweep_dllm_0.9_mmlu             # Job name
-#SBATCH --output="./slurm_logs/sweep_dllm_0.9_mmlu_%A.out"       # Standard output log
-#SBATCH --error="./slurm_logs/sweep_dllm_0.9_mmlu_%A.err"         # Standard error log
+#SBATCH --job-name=sweep_dllm_0.9             # Job name
+#SBATCH --output="./slurm_logs/sweep_dllm_0.9_%A.out"       # Standard output log
+#SBATCH --error="./slurm_logs/sweep_dllm_0.9_%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
 #SBATCH --gres=gpu:2                        # Number of GPUs to allocate
@@ -37,13 +37,13 @@ VERI_FREQS=(3 4 5 6 7 8 9 10 11 12 13 14 15 16)  # 0.9
 for DATASET_NAME in "${DATASETS[@]}"; do
     timestamp=$(date +"%Y_%m_%d_%H_%M")  # equivalent of datetime.now().strftime("%Y_%m_%d_%H_%M") in python
     echo "Dataset ${DATASET_NAME} timestamp: ${timestamp}"
-    logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}.ansi"
+    logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}_dllm.ansi"
 
     while [ -f "$logfile" ]; do
         echo "Log file ${logfile} exists. Sleeping 60 seconds and retaking timestamp..."
         sleep 60
         timestamp=$(date +"%Y_%m_%d_%H_%M")
-        logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}.ansi"
+        logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}_dllm.ansi"
     done
 
     for FREQ in "${VERI_FREQS[@]}"; do
