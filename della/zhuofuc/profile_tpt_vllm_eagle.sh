@@ -54,7 +54,8 @@ wait_for_server() {
 
 num_speculative_tokens_set=(2 3 4 5 6 7)
 for num_speculative_tokens in ${num_speculative_tokens_set[@]}; do
-    output_file="${OUTPUT_DIR}/logs/${timestamp}_tpt_vllm_eagle_${num_speculative_tokens}_${TARGET_MODEL//\//_}.log"
+    timestamp=$(date +"%Y_%m_%d_%H_%M")
+    output_file="${OUTPUT_DIR}/logs/${timestamp}_tpt_vllm_eagle_${num_speculative_tokens}_${TARGET_MODEL//\//_}_${DRAFT_MODEL//\//_}.log"
     if [ -f "$output_file" ]; then
         echo "Result for num_speculative_tokens $num_speculative_tokens ($output_file) already exists. Skipping..."
         continue
@@ -64,8 +65,6 @@ for num_speculative_tokens in ${num_speculative_tokens_set[@]}; do
     VLLM_BASE_PID=$!
     wait_for_server $VLLM_PORT
     nvidia-smi
-
-    timestamp=$(date +"%Y_%m_%d_%H_%M")
 
     echo "Profiling TPT for vLLM on model ${TARGET_MODEL} ..."
     python profiling/profile_tpt_vllm.py --port $VLLM_PORT --target_model_name "$TARGET_MODEL" --num_questions $NUM_QUESTIONS --max_new_tokens $MAX_NEW_TOKENS --output_file "$output_file"
