@@ -53,7 +53,13 @@ wait_for_server() {
 
 num_speculative_tokens_set=(8 16 32 64)
 for num_speculative_tokens in ${num_speculative_tokens_set[@]}; do
-    vllm serve "$TARGET_MODEL" --dtype auto -tp "$TP_SIZE" --max_model_len 4096 --gpu-memory-utilization 0.95 --port $VLLM_PORT --enforce-eager --speculative_config "'$(jq -nc --argjson n "$num_speculative_tokens" '{"method":"suffix","num_speculative_tokens": $n}')'" &
+    output_file="${OUTPUT_DIR}/logs/${timestamp}_tpt_vllm_suffix_${num_speculative_tokens}_${TARGET_MODEL//\//_}.log"
+    if [ -f "$output_file" ]; then
+        echo "Result for num_speculative_tokens $num_speculative_tokens ($output_file) already exists. Skipping..."
+        continue
+    fi
+
+    vllm serve "$TARGET_MODEL" --dtype auto -tp "$TP_SIZE" --max_model_len 4096 --gpu-memory-utilization 0.95 --port $VLLM_PORT --enforce-eager --speculative_config "$(jq -nc --argjson n "$num_speculative_tokens" '{"method":"suffix","num_speculative_tokens": $n}')" &
     VLLM_BASE_PID=$!
     wait_for_server $VLLM_PORT
     nvidia-smi
@@ -61,8 +67,9 @@ for num_speculative_tokens in ${num_speculative_tokens_set[@]}; do
     timestamp=$(date +"%Y_%m_%d_%H_%M")
 
     echo "Profiling TPT for vLLM on model ${TARGET_MODEL} ..."
-    python profiling/profile_tpt_vllm.py --port $VLLM_PORT --target_model_name "$TARGET_MODEL" --num_questions $NUM_QUESTIONS --max_new_tokens $MAX_NEW_TOKENS --output_file "${OUTPUT_DIR}/logs/${timestamp}_tpt_vllm_suffix_${num_speculative_tokens}_${TARGET_MODEL//\//_}.log"
+    python profiling/profile_tpt_vllm.py --port $VLLM_PORT --target_model_name "$TARGET_MODEL" --num_questions $NUM_QUESTIONS --max_new_tokens $MAX_NEW_TOKENS --output_file "$output_file"
 
     sleep 10
     kill $VLLM_BASE_PID
+    sleep 10
 done
