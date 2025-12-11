@@ -2,10 +2,10 @@
 import os
 import sys
 import time
-import openai
 import argparse
 import logging
-from openai import OpenAI
+import httpx
+from transformers import AutoTokenizer
 
 # Add root directory to path to import utils
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,9 +38,20 @@ logging.basicConfig(
     # datefmt="%m%d",
 )
 
-client = OpenAI(
-    api_key="EMPTY",
-    base_url=f"http://localhost:{args.port}/v1",
+try:
+    tokenizer = AutoTokenizer.from_pretrained(args.target_model_name)
+except Exception as e:
+    logging.warning(f"Could not load tokenizer locally for {args.target_model_name}. Prompt will be sent raw. Error: {e}")
+    exit(1)
+
+GEN_ENDPOINT = f"http://localhost:{args.port}/inference/v1/generate"
+transport = httpx.HTTPTransport()
+headers = {"Authorization": f"Bearer dummy"}
+client = httpx.Client(
+    transport=transport,
+    base_url=GEN_ENDPOINT,
+    timeout=600,
+    headers=headers,
 )
 
 tpts = {}
@@ -52,23 +63,28 @@ for dataset_name in ["aime", "math", "gpqa", "mmlu", "humaneval"]:
     total_time = 0
     total_output_tokens = 0
 
-    # for problem_id in range(1):
-    for problem_id in range(30):
+    for problem_id in range(args.num_questions):
         raw_data = format_problem_and_options(args, problem_id)
         
         messages = [
             {"role": "user", "content": get_first_user_msg(args, raw_data)},
         ]
-        extra_body = {"add_generation_prompt": True}
+        token_ids = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True
+        )
         
         start_time = time.perf_counter()
-        response = client.chat.completions.create(
-            model=args.target_model_name,
-            messages=messages,
-            max_tokens=args.max_new_tokens,
-            extra_body=extra_body,
-        )
-        num_output_tokens = response.usage.completion_tokens
+        payload = {
+            "model": args.target_model_name,
+            "token_ids": token_ids,
+            "sampling_params": {"max_tokens": args.max_new_tokens, "temperature": 0.0, "detokenize": False},
+            "stream": False,
+        }
+        resp = client.post(GEN_ENDPOINT, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        num_output_tokens = len(data["choices"][0]["token_ids"])-len(token_ids)
         elapsed = time.perf_counter() - start_time  # seconds
         
         total_time += elapsed

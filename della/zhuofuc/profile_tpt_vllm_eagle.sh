@@ -61,7 +61,7 @@ for num_speculative_tokens in ${num_speculative_tokens_set[@]}; do
         continue
     fi
 
-    vllm serve "$TARGET_MODEL" --dtype auto -tp "$TP_SIZE" --max_model_len 4096 --gpu-memory-utilization 0.95 --port $VLLM_PORT --enforce-eager --speculative_config "$(jq -nc --argjson n "$num_speculative_tokens" --arg model "$DRAFT_MODEL" '{"method":"eagle","num_speculative_tokens": $n, "model": $model, "draft_tensor_parallel_size": 1}')" &
+    vllm serve "$TARGET_MODEL" --dtype auto -tp "$TP_SIZE" --max_model_len 4096 --gpu-memory-utilization 0.95 --port $VLLM_PORT --enforce-eager --speculative_config "$(jq -nc --argjson n "$num_speculative_tokens" --arg model "$DRAFT_MODEL" '{"method":"eagle3","num_speculative_tokens": $n, "model": $model, "draft_tensor_parallel_size": 1}')" &
     VLLM_BASE_PID=$!
     wait_for_server $VLLM_PORT
     nvidia-smi
