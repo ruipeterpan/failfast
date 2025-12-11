@@ -313,12 +313,20 @@ args.latency = {  # all in ms
     #         "Qwen2.5-32B-Instruct": 105,  # Qwen2.5-32B, latency of short prefill pass (~=tpt)
     #     },
     # },
-    "vLLM_A6000": {
+    "vLLM_A6000": {  # eager mode on for all numbers
         "draft_fwd_pass": 6.1,
         "target_tpt": {
             "Qwen2.5-7B-Instruct": 13.5,
             "Qwen2.5-14B-Instruct": 24.7,
             "Qwen2.5-32B-Instruct": 52.6,
+        },
+    },
+    "vLLM_H100": {
+        "draft_fwd_pass": 2.9,  # eager mode: 9.25
+        "target_tpt": {  # eager mode on :P
+            "Qwen2.5-14B-Instruct": 14.3,  # w/o eager mode: 14.3. 8.45??
+            "Qwen2.5-32B-Instruct": 18.6,
+            "Qwen2.5-72B-Instruct": 32.2,
         },
     },
 }
