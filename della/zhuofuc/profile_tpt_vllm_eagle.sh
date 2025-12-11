@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=profile_tpt_vllm_suffix              # Job name
-#SBATCH --output="./slurm_logs/profile_tpt_vllm_suffix_%A.out"       # Standard output log
-#SBATCH --error="./slurm_logs/profile_tpt_vllm_suffix_%A.err"         # Standard error log
+#SBATCH --job-name=profile_tpt_vllm_eagle              # Job name
+#SBATCH --output="./slurm_logs/profile_tpt_vllm_eagle_%A.out"       # Standard output log
+#SBATCH --error="./slurm_logs/profile_tpt_vllm_eagle_%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
 #SBATCH --gres=gpu:2                        # Number of GPUs to allocate
@@ -30,6 +30,7 @@ OUTPUT_DIR="./outputs"
 # TARGET_MODEL="Qwen/Qwen2.5-32B-Instruct"
 # TARGET_MODEL="Qwen/Qwen2.5-14B-Instruct"
 TARGET_MODEL="Qwen/Qwen2.5-7B-Instruct"
+DRAFT_MODEL="leptonai/EAGLE-Qwen2.5-7B-Instruct"
 TP_SIZE=2
 NUM_QUESTIONS=30
 MAX_NEW_TOKENS=1024
@@ -51,15 +52,15 @@ wait_for_server() {
     done
 }
 
-num_speculative_tokens_set=(8 16 32 64)
+num_speculative_tokens_set=(2 3 4 5 6 7)
 for num_speculative_tokens in ${num_speculative_tokens_set[@]}; do
-    output_file="${OUTPUT_DIR}/logs/${timestamp}_tpt_vllm_suffix_${num_speculative_tokens}_${TARGET_MODEL//\//_}.log"
+    output_file="${OUTPUT_DIR}/logs/${timestamp}_tpt_vllm_eagle_${num_speculative_tokens}_${TARGET_MODEL//\//_}.log"
     if [ -f "$output_file" ]; then
         echo "Result for num_speculative_tokens $num_speculative_tokens ($output_file) already exists. Skipping..."
         continue
     fi
 
-    vllm serve "$TARGET_MODEL" --dtype auto -tp "$TP_SIZE" --max_model_len 4096 --gpu-memory-utilization 0.95 --port $VLLM_PORT --enforce-eager --speculative_config "$(jq -nc --argjson n "$num_speculative_tokens" '{"method":"suffix","num_speculative_tokens": $n}')" &
+    vllm serve "$TARGET_MODEL" --dtype auto -tp "$TP_SIZE" --max_model_len 4096 --gpu-memory-utilization 0.95 --port $VLLM_PORT --enforce-eager --speculative_config "$(jq -nc --argjson n "$num_speculative_tokens" --arg model "$DRAFT_MODEL" '{"method":"eagle","num_speculative_tokens": $n, "model": $model, "draft_tensor_parallel_size": 1}')" &
     VLLM_BASE_PID=$!
     wait_for_server $VLLM_PORT
     nvidia-smi

@@ -43,6 +43,7 @@ client = OpenAI(
     base_url=f"http://localhost:{args.port}/v1",
 )
 
+tpts = {}
 for dataset_name in ["aime", "math", "gpqa", "mmlu", "humaneval"]:
     args.dataset_name = dataset_name
     dataset = populate_dataset(args)
@@ -74,6 +75,12 @@ for dataset_name in ["aime", "math", "gpqa", "mmlu", "humaneval"]:
         total_output_tokens += num_output_tokens
 
     avg_tpt = (total_time * 1000) / total_output_tokens
-    print(f"Dataset {dataset_name}: Average TPT: {avg_tpt:.2f} ms/token")
+    print(f"Dataset {dataset_name}: Average TPT: {avg_tpt:.2f}={total_time * 1000:.2f}/{total_output_tokens:.2f} ms/token")
+    tpts[dataset_name] = avg_tpt
+
+with open(args.output_file, "w") as f:
+    f.write("Dataset: Average TPT:\n")
+    for dataset_name, tpt in tpts.items():
+        f.write(f"{dataset_name}: {tpt:.2f} ms/token\n")
 
 # %%
