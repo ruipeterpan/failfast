@@ -5,6 +5,7 @@ import time
 import argparse
 import logging
 import httpx
+from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 # Add root directory to path to import utils
@@ -39,7 +40,11 @@ logging.basicConfig(
 )
 
 try:
-    tokenizer = AutoTokenizer.from_pretrained(args.target_model_name)
+    local_model_path = snapshot_download(
+        repo_id=args.target_model_name, 
+        local_files_only=True
+    )
+    tokenizer = AutoTokenizer.from_pretrained(local_model_path)
 except Exception as e:
     logging.warning(f"Could not load tokenizer locally for {args.target_model_name}. Prompt will be sent raw. Error: {e}")
     exit(1)
