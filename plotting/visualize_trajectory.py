@@ -9,23 +9,30 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from playwright.sync_api import sync_playwright
 
+# colors = [  # Gemini 3's defaults
+#     "rgba(255, 173, 173, 0.5)", 
+#     "rgba(255, 214, 165, 0.5)", 
+#     "rgba(253, 255, 182, 0.5)", 
+#     "rgba(202, 255, 191, 0.5)", 
+#     "rgba(155, 246, 255, 0.5)", 
+#     "rgba(160, 196, 255, 0.5)", 
+#     "rgba(189, 178, 255, 0.5)",
+#     "rgba(255, 198, 255, 0.5)"
+# ]
+
+colors = [
+    # "rgba(116, 198, 157, 1)",
+    # "rgba(149, 213, 178, 1)",
+    "rgba(183, 228, 199, 1)",
+    # "rgba(200, 236, 210, 1)",
+    "rgba(216, 243, 220, 1)",
+]
+
 def save_sd_trajectory_html(pickled_data, tokenizer, filename="trajectory.html", font_family="monospace"):
     """
     Generates an HTML file visualizing the speculative decoding trajectory.
     Enforces a fixed width to ensure PDF generation matches screen layout exactly.
     """
-    
-    # --- 1. Define Color Palette ---
-    colors = [
-        "rgba(255, 173, 173, 0.5)", 
-        "rgba(255, 214, 165, 0.5)", 
-        "rgba(253, 255, 182, 0.5)", 
-        "rgba(202, 255, 191, 0.5)", 
-        "rgba(155, 246, 255, 0.5)", 
-        "rgba(160, 196, 255, 0.5)", 
-        "rgba(189, 178, 255, 0.5)",
-        "rgba(255, 198, 255, 0.5)"
-    ]
 
     # --- 2. HTML Header & CSS ---
     html_content = f"""
@@ -262,16 +269,6 @@ def save_sd_accepted_trajectory_html(pickled_data, tokenizer, filename="accepted
     """
     
     # --- 1. Define Color Palette ---
-    colors = [
-        "rgba(255, 173, 173, 0.5)", 
-        "rgba(255, 214, 165, 0.5)", 
-        "rgba(253, 255, 182, 0.5)", 
-        "rgba(202, 255, 191, 0.5)", 
-        "rgba(155, 246, 255, 0.5)", 
-        "rgba(160, 196, 255, 0.5)", 
-        "rgba(189, 178, 255, 0.5)",
-        "rgba(255, 198, 255, 0.5)"
-    ]
 
     # --- 2. HTML Header & CSS ---
     html_content = f"""
@@ -548,8 +545,8 @@ def convert_html_to_cropped_pdf(html_filepath, pdf_filepath):
 
 # %%
 data_dir = "/data2/ruipan/diffspec" 
-pickle_filename = "pickles/Qwen2.5-32B-Instruct/math/2/dllm_0.05_df_0.4_60_10/1024.pickle"
-# pickle_filename = "pickles/Qwen2.5-32B-Instruct/math/2/ar_None_sf_8/1024.pickle"
+# pickle_filename = "pickles/Qwen2.5-32B-Instruct/math/2/dllm_0.05_df_0.4_60_10/1024.pickle"
+pickle_filename = "pickles/Qwen2.5-32B-Instruct/math/2/ar_None_sf_8/1024.pickle"
 pickle_fullpath = os.path.join(data_dir, pickle_filename)
 
 
