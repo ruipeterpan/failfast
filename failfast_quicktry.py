@@ -236,7 +236,7 @@ def construct_drafter_configs(args):
 
 # %%
 parser = argparse.ArgumentParser(description="Profiles the acceptance rate of speculative decoding within a single query.")
-parser.add_argument("--dataset_name", type=str, choices=["aime", "math", "gpqa", "mmlu", "humaneval"], default="math",
+parser.add_argument("--dataset_name", type=str, choices=["aime", "math", "gpqa", "mmlu", "gsm8k", "humaneval"], default="math",
                     help="Dataset")
 parser.add_argument("--output_dir", type=str, default="/data2/ruipan/diffspec", 
                     help="Where result pickle files (and output figures) will be written to")

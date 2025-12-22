@@ -6,11 +6,22 @@ import os
 sys.path.insert(1, os.path.dirname(os.getcwd()))
 from utils import populate_dataset, format_problem_and_options, get_first_user_msg
 
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-14B-Instruct")
+from huggingface_hub import snapshot_download
+model_name = "Qwen/Qwen2.5-14B-Instruct"
+try:
+    local_model_path = snapshot_download(
+        repo_id=model_name, 
+        local_files_only=True
+    )
+    print(f"✅ Found local model at: {local_model_path}")
+except Exception as e:
+    print(f"❌ Error: Model not found in local cache. Downloading from Hugging Face...")
+    local_model_path = model_name
+tokenizer = AutoTokenizer.from_pretrained(local_model_path)
 
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-14B-Instruct", torch_dtype="auto", device_map="auto")
+model = AutoModelForCausalLM.from_pretrained(local_model_path, torch_dtype="auto", device_map="auto")
 
-datasets = ["aime", "math", "gpqa", "mmlu", "humaneval"]
+datasets = ["aime", "math", "gpqa", "mmlu", "gsm8k", "humaneval"]
 for dataset_name in datasets:
     args = Namespace(dataset_name=dataset_name)
     dataset=populate_dataset(args)

@@ -149,6 +149,8 @@ def populate_dataset(args):
         dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond")["train"]
     elif args.dataset_name == "mmlu":
         dataset = load_dataset("TIGER-Lab/MMLU-Pro")["validation"]
+    elif args.dataset_name == "gsm8k":
+        dataset = load_dataset("openai/gsm8k")["test"]
     elif args.dataset_name == "humaneval":
         dataset = load_dataset("openai/openai_humaneval")["test"]
     else:
@@ -177,6 +179,8 @@ def format_problem_and_options(args, problem_id):
             "options": data["options"],
             "category": data["category"],
         }
+    elif args.dataset_name == "gsm8k":
+        return {"problem": args.dataset["question"][problem_id]}
     elif args.dataset_name == "humaneval":
         data = args.dataset[problem_id]
         return {"problem": data["prompt"]}
@@ -226,6 +230,14 @@ def get_first_user_msg(args, raw_data):
             problem=raw_data["problem"],
             options=raw_data["options"],
         )
+    elif args.dataset_name == "gsm8k":
+        system_prompt = """
+        Think step by step and then please provide an efficient and self-contained Python script that solves the following problem in a markdown code block:
+        ```
+        {problem}
+        ```
+        """
+        return system_prompt.format(problem=raw_data["problem"])
     elif args.dataset_name == "humaneval":
         system_prompt = """
         Think step by step and then please provide an efficient and self-contained Python script that solves the following problem in a markdown code block:
