@@ -28,6 +28,7 @@ from utils import (
     format_problem_and_options, format_drafter_name, get_proposal_str, get_output_tokens,
     get_output_dir,
     print_sd_trajectory,
+    get_rejected_overlap_info,
 )
 
 # %%
@@ -149,7 +150,6 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
                         lowconf_threshold=None,
                         max_spec_len=None,
                         incr_len=None,
-                        last_round_rejected=None,
     ):
     """Get the next few tokens from the model given the token IDs so far.
     Difference is that the dLLM drafter itself determines how many tokens to output based on model internal signals.
@@ -181,10 +181,6 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             spec_len=spec_len,
             return_prefill_kvs=False,
             args=args,
-            lowconf_threshold=lowconf_threshold,
-            max_spec_len=max_spec_len,
-            incr_len=incr_len,
-            last_round_rejected=last_round_rejected,
         )
     else:
         generated_ids, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies = dllm.generate_draft_tokens_arbitrary_length(
@@ -207,7 +203,6 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             lowconf_threshold=lowconf_threshold,
             max_spec_len=max_spec_len,
             incr_len=incr_len,
-            last_round_rejected=last_round_rejected,
         )
     
     full_output_seqlen = generated_ids.shape[1]
@@ -287,7 +282,6 @@ args.target_model_name_clean = args.target_model_name.split("/", 1)[1]
 
 ######custom fields for easier debugging######
 # args.log_level = "DEBUG"
-# args.disable_reusing_drafter_kvs = True
 # args.dataset_name = "gpqa"
 # args.overwrite = True
 # args.max_new_tokens = 1024
@@ -371,7 +365,7 @@ if not args.read_pickle:
 
 # %%
 for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
-# for problem_id in [21]:
+# for problem_id in [2]:
     transformers.set_seed(42)  # reproducibility for each question-model-model config pair
     raw_data = format_problem_and_options(args, problem_id)
     messages = [
@@ -461,17 +455,6 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                                     prev_prefill_output=prev_prefill_output)
                             prev_prefill_output = prefill_output
                     else:  # dynamic frequency: drafter determines how many tokens to propose
-                        
-                        ###start of logic of reusing rejected drafts from the last round###
-                        last_round_proposal = pickled_data["stats_each_round"][-1]["~draft_proposal"] if num_speculation_rounds > 0 else []
-                        last_round_accepted_len = pickled_data["stats_each_round"][-1]["accepted_len"] if num_speculation_rounds > 0 else 0
-                        if last_round_accepted_len < len(last_round_proposal) - 1:  # there are salvagable rejected tokens in the last round
-                            # last_round_rejected = last_round_proposal[last_round_accepted_len+1:] if num_speculation_rounds > 0 else []
-                            last_round_rejected = None
-                        else:
-                            last_round_rejected = None
-                        ###end of logic of reusing rejected drafts from the last round###
-                        
                         draft_proposal, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies = get_next_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=args.spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 2 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
@@ -481,11 +464,34 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                                     prev_prefill_output=prev_prefill_output,
                                                                     lowconf_threshold=lowconf_threshold,
                                                                     max_spec_len=max_spec_len,
-                                                                    incr_len=incr_len,
-                                                                    last_round_rejected=last_round_rejected,
-                                                                    )
+                                                                    incr_len=incr_len)
                         prev_prefill_output = prefill_output
                         spec_len = actual_spec_len  # update spec_len to the actual number of tokens proposed
+                        
+                        # XXX
+                        last_round_proposal = pickled_data["stats_each_round"][-1]["~draft_proposal"] if num_speculation_rounds > 0 else []
+                        last_round_accepted_len = pickled_data["stats_each_round"][-1]["accepted_len"] if num_speculation_rounds > 0 else 0
+                        if last_round_accepted_len < len(last_round_proposal) - 1:  # salvagable rejected tokens in the last round
+                            last_round_rejected = last_round_proposal[last_round_accepted_len+1:] if num_speculation_rounds > 0 else []  # doesn't include the token that was corrected
+                            curr_round_proposal_1stround = draft_proposal[:args.spec_len]
+                            
+                            # logging.info(f"{Colors.GREEN}[Round {num_speculation_rounds}] last round proposal {(last_round_proposal)}, last_round_accepted_len {last_round_accepted_len}, rejected {last_round_rejected}{Colors.RESET}")
+                            # logging.info(f"{Colors.GREEN}[Round {num_speculation_rounds}] last rejected {last_round_rejected}{Colors.RESET}")
+                            # logging.info(f"{Colors.GREEN}[Round {num_speculation_rounds}] curr_round_pr {curr_round_proposal_1stround}{Colors.RESET}")
+                            # good for us: if a suffix of curr_round_proposal_1stround is within last_round_rejected
+                            num_salvagable_tokens, start_index_rejected, start_index_proposal = get_rejected_overlap_info(last_round_rejected, curr_round_proposal_1stround)
+                            # logging.info(f"{Colors.GREEN}[Round {num_speculation_rounds}] num_salvagable_tokens {num_salvagable_tokens}, start_index_rejected {start_index_rejected}, start_index_proposal {start_index_proposal}{Colors.RESET}")
+                            # logging.info(f"{Colors.GREEN}[Round {num_speculation_rounds}] num_salvagable_tokens {num_salvagable_tokens}: {last_round_rejected[start_index_rejected:]}, new prefix: {curr_round_proposal_1stround[:start_index_proposal]}{Colors.RESET}")
+                            # if we wanted to salvage tokens from the previous round, here is the length we can submit for verification:
+                            if num_salvagable_tokens != 0:
+                                veri_len = start_index_proposal + num_salvagable_tokens
+                                if veri_len > 10:
+                                    logging.info(f"{Colors.YELLOW}[Round {num_speculation_rounds}] Salvaging tokens, veri_len {veri_len}{Colors.RESET}")
+                                    spec_len = veri_len
+                                    num_forward_passes = 1  # we only did one forward pass to get the first 10 draft tokens for comparison
+                                    # NOTE(ruipan): the above is an unrealistic assumption!!! Don't trust the output of this script
+                                    draft_proposal = curr_round_proposal_1stround[:start_index_proposal] + last_round_rejected[start_index_rejected:]
+                                    # logging.info(f"{Colors.YELLOW}[Round {num_speculation_rounds}] Updated draft proposal: {draft_proposal}{Colors.RESET}")
                         
                 total_num_forward_passes += num_forward_passes
                 # print(f"forward_pass_latencies {forward_pass_latencies}")  # NOTE(ruipan): seems to be similar to TPT of 1.5B AR model
@@ -603,7 +609,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
             total_tpt = latency_draft + latency_target
             avg_tpt = total_tpt / total_output_tokens
             speedup = args.latency[hardware]["target_tpt"][args.target_model_name_clean] / avg_tpt
-            logging.info(f"{Colors.CYAN}[Problem {problem_id}, {drafter_name}] [{hardware}] Speedup: {speedup:.2f}x (Drafter ratio {latency_draft / total_tpt * 100:.1f}% ({latency_draft:.1f}ms/{total_tpt:.1f}ms); Avg TPT of SD: {avg_tpt:.2f}ms) (num output tokens: {total_output_tokens}){Colors.RESET}")
+            logging.info(f"{Colors.CYAN}[Problem {problem_id}, {drafter_name}] [{hardware}] Speedup: {speedup:.2f}x (Drafter ratio {latency_draft / total_tpt * 100:.1f}% ({latency_draft:.1f}ms/{total_tpt:.1f}ms); Avg TPT of SD: {avg_tpt:.2f}ms){Colors.RESET}")
             
             if draft_type == "ar" and ar_drafter_speedup[hardware] is None:
                 ar_drafter_speedup[hardware] = speedup

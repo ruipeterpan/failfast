@@ -48,6 +48,68 @@ def format_drafter_name(args, drafter_config):
                 return f"dllm_{drafter_threshold}_df_{lowconf_threshold}_{max_spec_len}_{incr_len}"
 
 
+
+def get_rejected_overlap_info(last_round_rejected, curr_round_proposal):
+    """
+    Finds the longest suffix of curr_round_proposal that exists in last_round_rejected.
+    
+    Args:
+        last_round_rejected (list): The list containing rejected tokens.
+        curr_round_proposal (list): The list containing the current proposal tokens.
+
+    Returns:
+        tuple: (length_to_end, start_index_rejected, start_index_proposal)
+        
+        - length_to_end: Length from the match start in rejected to the end of the rejected list.
+        - start_index_rejected: Index in last_round_rejected where the match begins.
+        - start_index_proposal: Index in curr_round_proposal where the matching suffix begins.
+        
+        Returns (0, -1, -1) if no match is found.
+
+    Example:
+        >>> last_rejected = [
+        ...     1077, 594, 1477, 400, 69, 4080, 16, 15087, 1447, 41306, 
+        ...     4080, 16, 8, 284, 1124, 37018, 90, 18, 4080, 16, 7287, 
+        ...     17, 15170, 12, 16, 12, 17, 92, 284, 1124, 37018, 19999, 
+        ...     18, 12, 17, 15170, 12, 18, 92, 284, 1124, 37018, 19999, 
+        ...     20, 15170, 12, 18, 92, 284, 1124, 37018, 90
+        ... ]
+        >>> curr_proposal = [11, 1077, 594, 1477, 400, 69, 4080, 16, 15087, 1447]
+        >>> get_rejected_overlap_info(last_rejected, curr_proposal)
+        (53, 0, 1)
+
+        # Explanation:
+        # The longest matching suffix is [1077, 594, ..., 1447].
+        # It starts at index 1 in curr_proposal.
+        # It is found at index 0 in last_rejected.
+        # Length from index 0 to the end of last_rejected (len 53) is 53.
+    """
+    len_proposal = len(curr_round_proposal)
+    len_rejected = len(last_round_rejected)
+    
+    # Iterate through curr_round_proposal to create suffixes.
+    # i represents the start index in the proposal list.
+    for i in range(len_proposal):
+        # Create the suffix x
+        suffix = curr_round_proposal[i:]
+        len_suffix = len(suffix)
+        
+        # Slide through last_round_rejected to find this suffix
+        for j in range(len_rejected - len_suffix + 1):
+            
+            # Check if the slice matches the suffix
+            if last_round_rejected[j : j + len_suffix] == suffix:
+                
+                # Found the suffix.
+                # j is the index in rejected.
+                # i is the index in proposal.
+                length_to_end = len_rejected - j
+                return length_to_end, j, i
+                
+    # Return defaults if no suffix matches
+    return 0, -1, -1
+
+
 def get_proposal_str(args, spec_len, accepted_len, draft_proposal, final_token):
     proposed_tokens_str = ""
     for i in range(accepted_len):

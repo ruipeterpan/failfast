@@ -42,6 +42,7 @@ def parse_log(filename):
           "max_acc": float or None,
           "max_spec": float or None,
           "num_rounds": int or None,
+          "avg_fwd_passes": float or None,  # Added for Task 1
       }
     """
     data = defaultdict(
@@ -54,6 +55,7 @@ def parse_log(filename):
                 "max_acc": None,
                 "max_spec": None,
                 "num_rounds": None,
+                "avg_fwd_passes": None,  # Initialize new field
             }
         )
     )
@@ -118,6 +120,12 @@ def parse_log(filename):
             # Avg fwd passes/round: capture rounds if present (321/107 -> rounds=107)
             m_fwd = FWD_RE.search(line)
             if m_fwd:
+                # Task 1: Extract the average forward passes float (Group 1)
+                try:
+                    data[cur_prob][cur_drafter]["avg_fwd_passes"] = float(m_fwd.group(1))
+                except ValueError:
+                    pass
+                
                 if m_fwd.group(3):
                     try:
                         data[cur_prob][cur_drafter]["num_rounds"] = int(
@@ -142,7 +150,7 @@ def parse_log(filename):
 
 def _format_stats_for_drafter(sums, drafter):
     """
-    Returns: acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str
+    Returns: acc_rate_str, num_rounds_str, avg_fwd_str, avg_acc_spec_str, max_acc_spec_str
     """
     s = sums[drafter]
 
@@ -160,6 +168,13 @@ def _format_stats_for_drafter(sums, drafter):
     else:
         num_rounds_str = "N/A"
 
+    # Task 1: Average of "Avg fwd passes/round"
+    if s["fwd_cnt"] > 0:
+        fwd_avg = s["fwd_sum"] / s["fwd_cnt"]
+        avg_fwd_str = f"{fwd_avg:.2f}"
+    else:
+        avg_fwd_str = "N/A"
+
     # average of avg accepted/speculated lengths across problems
     if s["avg_acc_cnt"] > 0 and s["avg_spec_cnt"] > 0:
         avg_acc_avg = s["avg_acc_sum"] / s["avg_acc_cnt"]
@@ -174,7 +189,7 @@ def _format_stats_for_drafter(sums, drafter):
     else:
         avg_acc_spec_str = "N/A"
 
-    # max of max accepted/speculated across problems
+    # Task 2: max of max accepted/speculated across problems
     max_acc = s["max_acc_max"]
     max_spec = s["max_spec_max"]
     if max_acc is not None and max_spec is not None:
@@ -186,7 +201,7 @@ def _format_stats_for_drafter(sums, drafter):
     else:
         max_acc_spec_str = "N/A"
 
-    return acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str
+    return acc_rate_str, num_rounds_str, avg_fwd_str, avg_acc_spec_str, max_acc_spec_str
 
 
 def compute_averages_and_print(data):
@@ -206,11 +221,14 @@ def compute_averages_and_print(data):
             "avg_acc_cnt": 0,
             "avg_spec_sum": 0.0,
             "avg_spec_cnt": 0,
-            "max_acc_max": None,
-            "max_spec_max": None,
+            "max_acc_max": None, # Task 2: Tracks global max
+            "max_spec_max": None, # Task 2: Tracks global max
             # rounds
             "rounds_sum": 0.0,
             "rounds_cnt": 0,
+            # fwd passes
+            "fwd_sum": 0.0,  # Added for Task 1
+            "fwd_cnt": 0,    # Added for Task 1
         }
     )
 
@@ -258,6 +276,7 @@ def compute_averages_and_print(data):
                 sums[drafter]["avg_spec_sum"] += stats["avg_spec"]
                 sums[drafter]["avg_spec_cnt"] += 1
 
+            # Task 2: Track maximum across all problems
             if stats.get("max_acc") is not None:
                 cur = sums[drafter]["max_acc_max"]
                 if cur is None or stats["max_acc"] > cur:
@@ -271,6 +290,11 @@ def compute_averages_and_print(data):
             if stats.get("num_rounds") is not None:
                 sums[drafter]["rounds_sum"] += stats["num_rounds"]
                 sums[drafter]["rounds_cnt"] += 1
+
+            # Task 1: Aggregate avg_fwd_passes
+            if stats.get("avg_fwd_passes") is not None:
+                sums[drafter]["fwd_sum"] += stats["avg_fwd_passes"]
+                sums[drafter]["fwd_cnt"] += 1
 
     # Discover all engines
     engine_set = set()
@@ -311,7 +335,7 @@ def compute_averages_and_print(data):
             else:
                 avg_verify = None
 
-            acc_rate_str, num_rounds_str, avg_acc_spec_str, max_acc_spec_str = _format_stats_for_drafter(
+            acc_rate_str, num_rounds_str, avg_fwd_str, avg_acc_spec_str, max_acc_spec_str = _format_stats_for_drafter(
                 sums, drafter
             )
 
@@ -322,6 +346,7 @@ def compute_averages_and_print(data):
 
             print(
                 f"{drafter}: {avg_speed:.3f}x, acc rate {acc_rate_str}, num rounds {num_rounds_str}, "
+                f"avg fwd passes {avg_fwd_str}, " # Added to output
                 f"spec latency {spec_str}, verify latency {verify_str}, total latency {total_str}, "
                 f"avg accepted/speculated: {avg_acc_spec_str}, "
                 f"max accepted/speculated: {max_acc_spec_str}"
@@ -340,8 +365,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parse ansi log file.")
     parser.add_argument("filename", type=str, help="Path to the .ansi log file")
     args = parser.parse_args()
-
+    
     data = parse_log(args.filename)
     compute_averages_and_print(data)
-
-# %%
