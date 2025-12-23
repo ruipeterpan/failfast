@@ -56,6 +56,10 @@ This script is a benchmarking tool for **Speculative Decoding (SD)**, designed t
 *   **Trajectory Analysis:** Provides detailed logging of "acceptance trajectories" to visualize where drafters succeed or fail during long-form reasoning.
 *   **Parameter Sweeping:** Automatically tests ranges of confidence thresholds and speculation lengths to find optimal configurations.
 
+### Parsing the output of failfast.py
+
+See `parse_log.py`. It orders the drafter configs from most speedup to least speedup. Note that the average is "average of average acceptance rates of each query" and is technically not a true average.
+
 ## EAGLE-3
 
 We use [SpecForge](https://github.com/sgl-project/SpecForge) to pretrain our own EAGLE-3 weights. We are still in the process of training more EAGLE-3 weights, so we only 
