@@ -150,7 +150,7 @@ def populate_dataset(args):
     elif args.dataset_name == "mmlu":
         dataset = load_dataset("TIGER-Lab/MMLU-Pro")["validation"]
     elif args.dataset_name == "gsm8k":
-        dataset = load_dataset("openai/gsm8k")["test"]
+        dataset = load_dataset("openai/gsm8k", "main")["test"]
     elif args.dataset_name == "humaneval":
         dataset = load_dataset("openai/openai_humaneval")["test"]
     else:
