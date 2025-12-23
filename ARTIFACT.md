@@ -5,7 +5,7 @@
 - Transformers: 4.53.3
 - vLLM: 0.13.0
 
-We have included a (dated version of our) `environment.yaml`, which has not been throughly tested.
+We have included a (dated version of our) `environment.yaml`, which has not been throughly tested. Sorry lol! We'll update this soon.
 
 ## Fast-dLLM-V2
 
@@ -59,6 +59,8 @@ This script is a benchmarking tool for **Speculative Decoding (SD)**, designed t
 ### Parsing the output of failfast.py
 
 See `parse_log.py`. It orders the drafter configs from most speedup to least speedup. Note that the average is "average of average acceptance rates of each query" and is technically not a true average.
+
+We also open-source all the plotting scripts under `/plotting`.
 
 ## EAGLE-3
 
