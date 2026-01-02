@@ -23,7 +23,7 @@ parser = argparse.ArgumentParser(description="Profiles the vLLM TPT of a model o
 parser.add_argument("--port", type=int, default=30000, help="Port to use for the vLLM server")
 parser.add_argument("--output_file", type=str, help="Name of the output file")
 # parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-32B-Instruct", 
-parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-7B-Instruct", 
+parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-14B-Instruct", 
                     help="Name of the base model to use")
 parser.add_argument("--num_questions", type=int, default=30,
                     help="Number of questions to run profiling on")
@@ -72,11 +72,10 @@ except Exception as e:
 # )
 
 tpts = {}
-for dataset_name in ["math", "aime", "gpqa", "mmlu", "gsm8k", "humaneval"]:
+for dataset_name in ["math", "aime",  "gpqa", "mmlu", "gsm8k", "humaneval"]:
     args.dataset_name = dataset_name
     dataset = populate_dataset(args)
 
-    # %%
     total_time = 0
     total_output_tokens = 0
 
@@ -92,7 +91,7 @@ for dataset_name in ["math", "aime", "gpqa", "mmlu", "gsm8k", "humaneval"]:
         response = client.chat.completions.create(
             model=model,
             messages=messages,
-            max_tokens=512,
+            max_tokens=args.max_new_tokens,
             extra_body=extra_body,
         )
         num_output_tokens = response.usage.completion_tokens
