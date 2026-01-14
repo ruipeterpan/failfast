@@ -17,7 +17,7 @@ First, we need to clone the Fast-dLLM weights from HuggingFace, replace the remo
 git clone https://huggingface.co/Efficient-Large-Model/Fast_dLLM_v2_1.5B
 cd Fast_dLLM_v2_1.5B
 # pulls our own generation functions
-git remote set-url origin https://github.com/ruipeterpan/Fast_dLLM_v2_1.5B.git
+git remote set-url origin https://github.com/USERNAME/Fast_dLLM_v2_1.5B.git
 git pull origin
 ```
 
