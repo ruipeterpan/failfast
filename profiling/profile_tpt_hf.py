@@ -47,7 +47,7 @@ elif dataset_name == "math":
     dataset = load_dataset("HuggingFaceH4/MATH-500")["test"]
 elif dataset_name == "gpqa":
     if os.getenv("HF_HUB_OFFLINE", "0") == "1":
-        dataset = load_from_disk("/scratch/gpfs/rp2773/hf_cache/datasets/gpqa")
+        dataset = load_from_disk("/scratch/gpfs/USER_ID/hf_cache/datasets/gpqa")
     else:
         dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond")["train"]
 else:
@@ -93,7 +93,7 @@ def profile_model(model, tokenizer, name, dataset, num_problems, n):
         elif "Fast_dLLM_v2_1.5B" in name:
             generated_ids = dllm.generate(
                 **model_inputs,
-                max_new_tokens=n,  # NOTE(ruipan): setting this to 8 will not lead to new tokens hmm
+                max_new_tokens=n,  # NOTE: setting this to 8 will not lead to new tokens hmm
                 small_block_size=8,
                 threshold=0.9,
                 # use greedy decoding, not sampling

@@ -109,4 +109,4 @@ dependencies:
       - urllib3==2.5.0
       - xxhash==3.6.0
       - yarl==1.22.0
-prefix: /scratch/gpfs/RAVIAN/rp2773/miniconda3/envs/vllm_dllm
+prefix: /scratch/gpfs/local_cluster/USER_ID/miniconda3/envs/vllm_dllm

@@ -30,9 +30,9 @@ Overview of the different generation methods within Fast-dLLM:
 
 We provide bash scripts (that are also Slurm job scripts) for running FailFast on our own hardware setup. You might need to tweak them for them to be runnable on custom setups.
 
-- `della/sweep_ar_drafter_freqs.sh`: Used for parameter sweeps for AR drafters
-- `della/sweep_dllm_drafter_freqs.sh`: Used for parameter sweeps for Fast-dLLM drafters
-- `della/sweep_dynamic_freqs.sh`: Used for parameter sweeps for FailFast.
+- `scripts/sweep_ar_drafter_freqs.sh`: Used for parameter sweeps for AR drafters
+- `scripts/sweep_dllm_drafter_freqs.sh`: Used for parameter sweeps for Fast-dLLM drafters
+- `scripts/sweep_dynamic_freqs.sh`: Used for parameter sweeps for FailFast.
 - Other scripts are either used for microbenchmarks or have been deprecated.
 
 All three scripts invoke `failfast.py`. Its primary purpose is to evaluate the efficiency, acceptance rates, and speedups of different "drafter" models (Auto-Regressive vs. dLLM) when paired with a larger target model (e.g., Qwen-32B) across various reasoning datasets.

@@ -544,7 +544,7 @@ def convert_html_to_cropped_pdf(html_filepath, pdf_filepath):
 
 
 # %%
-data_dir = "/data2/ruipan/diffspec" 
+data_dir = "/data2/USERNAME/failfast" 
 # pickle_filename = "pickles/Qwen2.5-32B-Instruct/math/2/dllm_0.05_df_0.4_60_10/1024.pickle"
 pickle_filename = "pickles/Qwen2.5-32B-Instruct/math/2/ar_None_sf_8/1024.pickle"
 pickle_fullpath = os.path.join(data_dir, pickle_filename)

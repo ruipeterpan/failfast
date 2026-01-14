@@ -21,7 +21,7 @@ def read_pickle(data_dir, target_model, dataset, question_id, drafter_config):
         data = pickle.load(f)
     return data
 
-data_dir = "/home/ruipan/data2/diffspec/pickles"
+data_dir = "/home/USERNAME/data2/failfast/pickles"
 target_model = "Qwen2.5-32B-Instruct"
 # datasets = ["math", "aime", "gpqa", "mmlu", "humaneval"]
 datasets = ["math"]

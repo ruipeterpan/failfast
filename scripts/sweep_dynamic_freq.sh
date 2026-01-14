@@ -1,44 +1,43 @@
 #!/bin/bash
 #SBATCH --job-name=sweep_lookahead_gpqa              # Job name
-#SBATCH --output="/home/rp2773/slurm_logs/%A.out"       # Standard output log
-#SBATCH --error="/home/rp2773/slurm_logs/%A.err"         # Standard error log
+#SBATCH --output="/home/USER_ID/slurm_logs/%A.out"       # Standard output log
+#SBATCH --error="/home/USER_ID/slurm_logs/%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
 #SBATCH --gres=gpu:2                        # Number of GPUs to allocate
 ##SBATCH --constraint="gpu80"
 #SBATCH --time=6:00:00                        # Time limit (24 hours max)
 #SBATCH --mem=20G                            # Memory allocation (adjust as needed)
-#SBATCH --mail-user=ruipan@princeton.edu  # Your email
+#SBATCH --mail-user=USERNAME@SCHOOL.edu  # Your email
 #SBATCH --mail-type=ALL  # Options: BEGIN, END, FAIL, REQUEUE, TIME_LIMIT, etc.
-##SBATCH --partition=pli
-##SBATCH --account=specreason
-#SBATCH --partition=pli-lc
-#SBATCH --account=ravi-group
 
-# CLUSTER="ravi"
-CLUSTER="della"
+#SBATCH --partition=PARTITION
+#SBATCH --account=account
+
+# CLUSTER="local_cluster"
+CLUSTER="shared_cluster"
 
 # initialization: set environment variables based on the cluster
-if [ "$CLUSTER" = "ravi" ]; then
-    DATA_DIR="/home/ruipan/data2"
-    DLLM_DIR="/data2/ruipan/Fast_dLLM_v2_1.5B"
-    source /data2/ruipan/miniconda3/etc/profile.d/conda.sh
-elif [ "$CLUSTER" = "della" ]; then
-    DATA_DIR="/scratch/gpfs/RAVIAN/rp2773/data"
-    DLLM_DIR="/home/rp2773/data/Fast_dLLM_v2_1.5B"
-    export HF_HOME="/scratch/gpfs/RAVIAN/rp2773/hf_cache"
+if [ "$CLUSTER" = "local_cluster" ]; then
+    DATA_DIR="/home/USERNAME/data2"
+    DLLM_DIR="/data2/USERNAME/Fast_dLLM_v2_1.5B"
+    source /data2/USERNAME/miniconda3/etc/profile.d/conda.sh
+elif [ "$CLUSTER" = "shared_cluster" ]; then
+    DATA_DIR="/scratch/gpfs/local_cluster/USER_ID/data"
+    DLLM_DIR="/home/USER_ID/data/Fast_dLLM_v2_1.5B"
+    export HF_HOME="/scratch/gpfs/local_cluster/USER_ID/hf_cache"
     export HF_HUB_OFFLINE=1
     export HF_DATASETS_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
-    source /scratch/gpfs/RAVIAN/rp2773/miniconda3/etc/profile.d/conda.sh
+    source /scratch/gpfs/local_cluster/USER_ID/miniconda3/etc/profile.d/conda.sh
     nvidia-smi
 else
-    echo "Error: CLUSTER must be either 'ravi' or 'della'"
+    echo "Error: CLUSTER must be either 'local_cluster' or 'shared_cluster'"
     exit 1
 fi
 conda activate vllm_dllm
 
-OUTPUT_DIR="${DATA_DIR}/diffspec"
+OUTPUT_DIR="${DATA_DIR}/failfast"
 
 TARGET_MODEL="Qwen/Qwen2.5-32B-Instruct"
 # TARGET_MODEL="Qwen/Qwen2.5-14B-Instruct"

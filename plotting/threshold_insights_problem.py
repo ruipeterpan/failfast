@@ -140,7 +140,7 @@ def plot_thresholds(avg_acc, avg_spd, avg_fwd):
 
 # --- Run ---
 if __name__ == "__main__":
-    filename = "/data2/ruipan/diffspec/logs/2025_11_12_14_20_math.ansi"  # your log file
+    filename = "/data2/USERNAME/failfast/logs/2025_11_12_14_20_math.ansi"  # your log file
     data = parse_log(filename)
     avg_acc, avg_spd, avg_fwd = compute_avg(data)
     plot_thresholds(avg_acc, avg_spd, avg_fwd)

@@ -17,7 +17,7 @@ stats_list = []
 
 
 for qid in question_ids:
-    stats_path = f"/data2/ruipan/diffspec/pickles/{target_model}/{dataset}/{qid}/{drafter_name}/1024.pickle"
+    stats_path = f"/data2/USERNAME/failfast/pickles/{target_model}/{dataset}/{qid}/{drafter_name}/1024.pickle"
     with open(stats_path, "rb") as f:
         pickle_file = pickle.load(f)
     stats_each_round = pickle_file["stats_each_round"]

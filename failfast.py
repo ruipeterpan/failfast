@@ -100,7 +100,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             temperature=0.0,
             top_p=1.0,
             top_k=0.0,
-            # use_block_cache=True,  # NOTE(ruipan): doesn't seem to make a difference in latency, prob because we are running a 1.5B model, which is memory-bound
+            # use_block_cache=True,  # NOTE: doesn't seem to make a difference in latency, prob because we are running a 1.5B model, which is memory-bound
             is_drafter=is_drafter,
             spec_len=spec_len,
             return_prefill_kvs=False,
@@ -239,11 +239,11 @@ def construct_drafter_configs(args):
 parser = argparse.ArgumentParser(description="Profiles the acceptance rate of speculative decoding within a single query.")
 parser.add_argument("--dataset_name", type=str, choices=["aime", "math", "gsm8k", "gpqa", "humaneval"], default="math",
                     help="Dataset")
-parser.add_argument("--output_dir", type=str, default="/data2/ruipan/diffspec", 
+parser.add_argument("--output_dir", type=str, default="/data2/USERNAME/failfast", 
                     help="Where result pickle files (and output figures) will be written to")
 parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-32B-Instruct", 
                     help="Name of the base model to use")
-parser.add_argument("--dllm_dir", type=str, default="/data2/ruipan/Fast_dLLM_v2_1.5B", 
+parser.add_argument("--dllm_dir", type=str, default="/data2/USERNAME/Fast_dLLM_v2_1.5B", 
                     help="Dir to the dLLM weights and (modified) modeling.py")
 parser.add_argument("--num_questions", type=int, default=1,
                     help="Number of questions to run profiling on")
@@ -346,7 +346,7 @@ if not args.read_pickle:
         device_map="auto",
         trust_remote_code=True
     )
-    # NOTE(ruipan): drafter and target should probably share the same tokenizer?
+    # NOTE: drafter and target should probably share the same tokenizer?
     # dllm_tokenizer = AutoTokenizer.from_pretrained(dllm_name, trust_remote_code=True)
     dllm_tokenizer = target_tokenizer
     if args.run_ar:
@@ -473,7 +473,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                         spec_len = actual_spec_len  # update spec_len to the actual number of tokens proposed
                         
                 total_num_forward_passes += num_forward_passes
-                # print(f"forward_pass_latencies {forward_pass_latencies}")  # NOTE(ruipan): TPT of 1.5B dLLM is similar to 1.5B AR model
+                # print(f"forward_pass_latencies {forward_pass_latencies}")  # NOTE: TPT of 1.5B dLLM is similar to 1.5B AR model
                 
                 if not draft_proposal: # Stop if the draft model has nothing to say
                     logging.info(f"{Colors.RED}[Round {num_speculation_rounds}] Warning: Draft model returned no tokens{Colors.RESET}")

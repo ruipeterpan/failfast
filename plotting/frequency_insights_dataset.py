@@ -190,12 +190,12 @@ def plot_thresholds(avg_acc, avg_spd, avg_fwd, baseline=None):
 
 # --- Run ---
 if __name__ == "__main__":
-    # filename = "/data2/ruipan/diffspec/logs/2025_11_13_01_19_math.ansi"  # updated multi-problem log
-    # filename = "/data2/ruipan/diffspec/logs/2025_11_13_01_20_aime.ansi"  # updated multi-problem log
+    # filename = "/data2/USERNAME/failfast/logs/2025_11_13_01_19_math.ansi"  # updated multi-problem log
+    # filename = "/data2/USERNAME/failfast/logs/2025_11_13_01_20_aime.ansi"  # updated multi-problem log
 
-    # filename = "/data2/ruipan/diffspec/logs/2025_11_18_00_32_math.ansi"
-    # filename = "/data2/ruipan/diffspec/logs/2025_11_19_17_18_math.ansi"
-    filename = "/data2/ruipan/diffspec/logs/2025_11_20_01_15_aime.ansi"
+    # filename = "/data2/USERNAME/failfast/logs/2025_11_18_00_32_math.ansi"
+    # filename = "/data2/USERNAME/failfast/logs/2025_11_19_17_18_math.ansi"
+    filename = "/data2/USERNAME/failfast/logs/2025_11_20_01_15_aime.ansi"
     data = parse_log(filename)
 
     # -------------------------
