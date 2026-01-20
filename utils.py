@@ -36,8 +36,13 @@ def is_interactive():
 def format_drafter_name(args, drafter_config):
     draft_type, drafter_threshold, freq_scheme, lowconf_threshold, \
         max_spec_len, incr_len = drafter_config
-    if draft_type == "ar":  # ar
-        return f"ar_None_sf_{args.spec_len}"
+    if draft_type == "ar":
+        if freq_scheme == "sf":
+            return f"ar_None_sf_{args.spec_len}"
+        elif freq_scheme == "df":
+            return f"ar_None_df_{lowconf_threshold}_{max_spec_len}_{incr_len}"
+        else:
+            raise ValueError(f"Unknown freq_scheme for AR drafter: {freq_scheme}")
     else:  # dllm
         if freq_scheme == "sf":  # Fast-dLLM, static frequency
             return f"dllm_{drafter_threshold}_sf_{args.spec_len}"
@@ -46,6 +51,8 @@ def format_drafter_name(args, drafter_config):
                 return f"dllm_{drafter_threshold}_df"  # obsolete
             else:
                 return f"dllm_{drafter_threshold}_df_{lowconf_threshold}_{max_spec_len}_{incr_len}"
+        else:
+            raise ValueError(f"Unknown freq_scheme for dLLM drafter: {freq_scheme}")
 
 
 
