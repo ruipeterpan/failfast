@@ -12,15 +12,20 @@ x_values, y_values = zip(*data)
 # Create the plot
 fig, ax = plt.subplots(figsize=(4.5, 2.4))
 # fig, ax = plt.subplots(figsize=(3, 2.7))
-ax.plot(x_values, y_values, marker='o', linestyle='-', color='#2D6A4F', markersize=6)
+ax.plot(x_values, y_values, marker='o', linestyle='-', color='#2D6A4F', markersize=6, label="dLLM Drafter")
+
+# add ar baseline
+ax.plot(8, 58.2, marker='D', color='#74C69D', markersize=6, label="AR Drafter")
 
 # Labeling
 # plt.title("Acceptance Rate vs. Num Drafter Passes", fontsize=14)
-ax.set_xlabel("Drafter Forward Passes", fontsize=12)
+ax.set_xlabel("Avg. Drafter Forward Passes per Round", fontsize=12)
 ax.set_ylabel("Acceptance Rate (%)", fontsize=12)
 ax.set_ylim(25, 62.5)
-ax.set_xlim(2, 6.3)
+# ax.set_xlim(2, 6.3)
+ax.set_xlim(2, 8.3)
 ax.tick_params(axis='both', which='major', labelsize=12)
+ax.legend(fontsize=10)
 
 # Styling
 ax.grid(True, linestyle='--', alpha=0.7)
