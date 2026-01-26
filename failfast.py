@@ -183,6 +183,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
             small_block_size=small_block_size,
+            block_size=args.block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
@@ -201,6 +202,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
             small_block_size=small_block_size,
+            block_size=args.block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
@@ -254,6 +256,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
             small_block_size=small_block_size,
+            block_size=args.block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
@@ -347,6 +350,8 @@ parser.add_argument("--max_new_tokens", type=int, default=1024,
                     help="Max new tokens from the target model")
 parser.add_argument("--block_size", type=int, default=32,
                     help="Block size in Fast-dLLM")
+parser.add_argument("--small_block_size", type=int, default=8,
+                    help="Small block size in Fast-dLLM")
 parser.add_argument("--spec_len", type=int, default=10,
                     help="Frequency of verification steps (in number of tokens)")
 parser.add_argument("--drafter_thresholds", type=float, nargs="+",  # one or more float thresholds
@@ -378,7 +383,7 @@ args, _ = parser.parse_known_args()
 
 
 
-######custom fields for easier debugging######
+######custom fields for easier debugging########
 # args.log_level = "DEBUG"
 # args.disable_reusing_drafter_kvs = True
 # args.dataset_name = "gpqa"
@@ -387,13 +392,15 @@ args, _ = parser.parse_known_args()
 # args.run_ar = True
 # args.ar_dynamic = True
 # args.baseline_sweep = True
-# args.spec_len = 8
+# args.spec_len = 16
+# args.block_size = 32
+# args.small_block_size = 16
 # args.run_dllm_sf = True
 # args.read_pickle = True  # XXX: read trajectory from pickle as well in future debugging
 # args.target_model_name = "Qwen/Qwen2.5-7B-Instruct"  # for easier debugging
 # args.sweep_lowconf_threshold = [0.4]
-# args.sweep_max_spec_len = [60]
-# args.sweep_incr_len = [10]
+# args.sweep_max_spec_len = [96]
+# args.sweep_incr_len = [16]
 ######custom fields for easier debugging######
 
 args.target_model_name_clean = args.target_model_name.split("/", 1)[1]
@@ -536,14 +543,14 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                             draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 2 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
-                                                                    small_block_size=8,
+                                                                    small_block_size=args.small_block_size,
                                                                     threshold=drafter_threshold,
                                                                     is_drafter=True,)
                         else:
                             draft_proposal, prefill_output, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 2 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
-                                                                    small_block_size=8,
+                                                                    small_block_size=args.small_block_size,
                                                                     threshold=drafter_threshold,
                                                                     is_drafter=True,
                                                                     prev_prefill_output=prev_prefill_output)
@@ -564,7 +571,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                         draft_proposal, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies = get_next_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=args.spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 3 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
-                                                                    small_block_size=8,
+                                                                    small_block_size=args.small_block_size,
                                                                     threshold=drafter_threshold,
                                                                     is_drafter=True,
                                                                     prev_prefill_output=prev_prefill_output,
