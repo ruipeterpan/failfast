@@ -65,15 +65,34 @@ def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n):
         'attention_mask': torch.cat([orig_model_inputs['attention_mask'], new_mask], dim=1)
     }
 
-    generated_ids = model.generate(
+    # generated_ids = model.generate(
+    #     **new_model_inputs,
+    #     max_new_tokens=n,
+    #     do_sample=False,  # use greedy decoding, not sampling; overrides all below sampling params
+    #     # temperature=0.0, top_p=1.0, top_k=0.0,
+    # )
+    # generated_ids = generated_ids[0][len(new_model_inputs["input_ids"][0]):]
+    
+    generate_output = model.generate(
         **new_model_inputs,
         max_new_tokens=n,
-        do_sample=False,  # use greedy decoding, not sampling; overrides all below sampling params
-        # temperature=0.0, top_p=1.0, top_k=0.0,
+        do_sample=False,  # use greedy decoding
+        output_scores=True,
+        return_dict_in_generate=True,
     )
-    generated_ids = generated_ids[0][len(new_model_inputs["input_ids"][0]):]
     
-    return generated_ids.tolist()
+    # Extract generated token IDs (excluding the input)
+    generated_ids = generate_output.sequences[0][len(new_model_inputs["input_ids"][0]):]
+    
+    # return the list of confidence scores
+    scores = generate_output.scores
+    confidences = []
+    for i, (token_id, score_logits) in enumerate(zip(generated_ids, scores)):
+        probs = torch.softmax(score_logits, dim=-1)
+        conf = probs[0, token_id].item()
+        confidences.append(conf)
+    
+    return generated_ids.tolist(), confidences
 
 
 def get_next_tokens_ar(
@@ -251,7 +270,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
     }
 
     if args.disable_reusing_drafter_kvs:
-        generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies = dllm.generate_draft_tokens_arbitrary_length(
+        generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens = dllm.generate_draft_tokens_arbitrary_length(
             # **new_model_inputs,
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
@@ -274,7 +293,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             last_round_rejected=last_round_rejected,
         )
     else:
-        generated_ids, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies = dllm.generate_draft_tokens_arbitrary_length(
+        generated_ids, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens = dllm.generate_draft_tokens_arbitrary_length(
             # **new_model_inputs,
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
@@ -307,8 +326,8 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
         logging.info(f"{Colors.RED}Generated ids contain {special_token} tokens! {generated_ids}{Colors.RESET}")
     
     if not args.disable_reusing_drafter_kvs:
-        return generated_ids, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies
-    return generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies
+        return generated_ids, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens
+    return generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens
 
 
 def construct_drafter_configs(args):
@@ -390,6 +409,7 @@ args, _ = parser.parse_known_args()
 # args.overwrite = True
 # args.max_new_tokens = 1024
 # args.run_ar = True
+# args.output_dir = "/data2/ruipan/failfast_icml_rebuttal"
 # args.ar_dynamic = True
 # args.baseline_sweep = True
 # args.spec_len = 16
@@ -520,8 +540,9 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                 # A. PROPOSE: Get next n speculative tokens from draft model based on current accepted prefix
                 if draft_type == "ar":
                     if freq_scheme == "sf":
-                        draft_proposal = get_next_n_tokens_ar(draft_model, orig_model_inputs, current_token_ids, n=args.spec_len)
+                        draft_proposal, confidences = get_next_n_tokens_ar(draft_model, orig_model_inputs, current_token_ids, n=args.spec_len)
                         spec_len = args.spec_len
+                        # logging.info(f"[Round {num_speculation_rounds}] AR drafter confidences {confidences}")
                     else:
                         draft_proposal, confidences = get_next_tokens_ar(
                             draft_model,
@@ -555,6 +576,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                                     is_drafter=True,
                                                                     prev_prefill_output=prev_prefill_output)
                             prev_prefill_output = prefill_output
+                        confidences = None  # NOTE(ruipan): placeholder
                     else:  # dynamic frequency: drafter determines how many tokens to propose
                         ###start of logic of reusing rejected drafts from the last round###
                         last_round_proposal = pickled_data["stats_each_round"][-1]["~draft_proposal"] if num_speculation_rounds > 0 else []
@@ -568,7 +590,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                             last_round_rejected = None
                         ###end of logic of reusing rejected drafts from the last round###
                         
-                        draft_proposal, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies = get_next_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
+                        draft_proposal, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies, confidences = get_next_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=args.spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 3 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
                                                                     small_block_size=args.small_block_size,
@@ -582,6 +604,8 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                                     )
                         prev_prefill_output = prefill_output
                         spec_len = actual_spec_len  # update spec_len to the actual number of tokens proposed
+                        
+                        # logging.info(f"[Round {num_speculation_rounds}] FailFast drafter confidences {confidences}")
                         
                 total_num_forward_passes += num_forward_passes
                 # print(f"forward_pass_latencies {forward_pass_latencies}")  # NOTE(ruipan): TPT of 1.5B dLLM is similar to 1.5B AR model
@@ -663,6 +687,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                     "num_forward_passes": num_forward_passes,  # number of drafter fwd passes this round
                     "final_token": final_token,  # the first corrected token or bonus token
                     "bonus_token": bonus_token,
+                    "confidences": [round(c, 3) for c in confidences],  # confidence scores for AR drafter's proposal
                 }
                 pickled_data["stats_each_round"].append(info_this_round)
                 
