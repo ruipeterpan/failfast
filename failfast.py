@@ -9,11 +9,11 @@ import pprint
 import logging
 import argparse
 import transformers
-import importlib
 import importlib.util
 from tqdm import tqdm
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from huggingface_hub import snapshot_download
 
 transformers.logging.set_verbosity_error()
 
@@ -343,10 +343,22 @@ def _load_fast_dllm_v1_modules(args):
     generate_module = importlib.util.module_from_spec(generate_spec)
     generate_spec.loader.exec_module(generate_module)
 
-    modeling_module = importlib.import_module("model.modeling_llada")
+    modeling_spec = importlib.util.spec_from_file_location("fast_dllm_v1_modeling", modeling_py)
+    modeling_module = importlib.util.module_from_spec(modeling_spec)
+    modeling_spec.loader.exec_module(modeling_module)
 
     _FAST_DLLM_V1_MODULES = (generate_module, modeling_module.LLaDAModelLM)
     return _FAST_DLLM_V1_MODULES
+
+
+def _resolve_local_snapshot_path(model_name_or_path):
+    """Resolve Hub model id to local cache path when available."""
+    if os.path.exists(model_name_or_path):
+        return model_name_or_path
+    try:
+        return snapshot_download(repo_id=model_name_or_path, local_files_only=True)
+    except Exception:
+        return model_name_or_path
 
 
 def get_next_n_tokens_dllm_v1(dllm_v1, args, orig_model_inputs, token_ids_so_far, spec_len, threshold):
@@ -506,14 +518,15 @@ args.latency = {  # all in ms
     },
 }
 
-target_tokenizer = AutoTokenizer.from_pretrained(args.target_model_name)
+target_model_path = _resolve_local_snapshot_path(args.target_model_name)
+target_tokenizer = AutoTokenizer.from_pretrained(target_model_path)
 args.target_tokenizer = target_tokenizer
 
 # %%
 if not args.read_pickle:
     logging.info(f"{Colors.BOLD}=== Loading target model: {args.target_model_name} ==={Colors.RESET}")
     target_model = AutoModelForCausalLM.from_pretrained(
-        args.target_model_name,
+        target_model_path,
         torch_dtype="auto",
         device_map="auto"
     )
@@ -534,14 +547,15 @@ if not args.read_pickle:
     if need_dllm_v1:
         _, LLaDAModelLM = _load_fast_dllm_v1_modules(args)
         dllm_v1_name = "GSAI-ML/LLaDA-8B-Instruct"
+        dllm_v1_path = _resolve_local_snapshot_path(dllm_v1_name)
         dllm_v1_device = "cuda" if torch.cuda.is_available() else "cpu"
         dllm_v1 = LLaDAModelLM.from_pretrained(
-            dllm_v1_name,
+            dllm_v1_path,
             trust_remote_code=True,
             torch_dtype=torch.bfloat16,
         ).to(dllm_v1_device).eval()
         # Keep parity with llada/chat.py loading; this tokenizer is not used for verification.
-        dllm_v1_tokenizer = AutoTokenizer.from_pretrained(dllm_v1_name, trust_remote_code=True)
+        dllm_v1_tokenizer = AutoTokenizer.from_pretrained(dllm_v1_path, trust_remote_code=True)
     # NOTE(ruipan): drafter and target should probably share the same tokenizer?
     # dllm_tokenizer = AutoTokenizer.from_pretrained(dllm_name, trust_remote_code=True)
     dllm_tokenizer = target_tokenizer
