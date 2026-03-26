@@ -359,6 +359,25 @@ def _resolve_local_snapshot_path(model_name_or_path):
     except Exception:
         return model_name_or_path
 
+
+def _sanitize_tokens_for_dllm_v1(token_ids, vocab_size, pad_token_id=126081):
+    """Replace out-of-range token ids with pad token id for LLaDA v1."""
+    if vocab_size is None:
+        return token_ids, 0
+    if vocab_size <= 0:
+        return token_ids, 0
+
+    safe_pad_id = pad_token_id if 0 <= pad_token_id < vocab_size else (vocab_size - 1)
+    invalid_mask = (token_ids < 0) | (token_ids >= vocab_size)
+    num_invalid = int(invalid_mask.sum().item())
+    if num_invalid == 0:
+        return token_ids, 0
+
+    token_ids = token_ids.clone()
+    token_ids[invalid_mask] = safe_pad_id
+    return token_ids, num_invalid
+
+
 def get_next_n_tokens_dllm_v1(dllm_v1, args, orig_model_inputs, token_ids_so_far, spec_len, small_block_size, threshold):
     """Get next n speculative tokens from Fast-dLLM-v1 (LLaDA backend)."""
     generator_mod, _ = _load_fast_dllm_v1_modules(args)
@@ -374,6 +393,15 @@ def get_next_n_tokens_dllm_v1(dllm_v1, args, orig_model_inputs, token_ids_so_far
     device = dllm_v1.device
     new_tokens = torch.tensor(token_ids_so_far, device=device, dtype=torch.long).unsqueeze(0)
     prompt = torch.cat([orig_model_inputs["input_ids"].to(device), new_tokens], dim=1)
+    prompt, num_sanitized = _sanitize_tokens_for_dllm_v1(
+        prompt,
+        getattr(dllm_v1.config, "vocab_size", None),
+        pad_token_id=126081,
+    )
+    if num_sanitized > 0:
+        logging.warning(
+            f"[dllm_v1] Replaced {num_sanitized} out-of-range token ids with pad token id 126081."
+        )
     prompt_len = prompt.shape[1]
 
     generated_ids, num_forward_passes = generator_fn(
@@ -508,6 +536,8 @@ args.latency = {  # all in ms
             "Qwen2.5-7B-Instruct": 13.5,
             "Qwen2.5-14B-Instruct": 24.7,
             "Qwen2.5-32B-Instruct": 52.6,
+            # TODO: get the actual TPT for Meta-Llama-3-70B-Instruct
+            "Meta-Llama-3-70B-Instruct": 1000,
         },
     },
 }
@@ -548,11 +578,11 @@ if not args.read_pickle:
             trust_remote_code=True,
             torch_dtype=torch.bfloat16,
         ).to(dllm_v1_device).eval()
-        # Keep parity with llada/chat.py loading; this tokenizer is not used for verification.
-        dllm_v1_tokenizer = AutoTokenizer.from_pretrained(dllm_v1_path, trust_remote_code=True)
     # NOTE(ruipan): drafter and target should probably share the same tokenizer?
     # dllm_tokenizer = AutoTokenizer.from_pretrained(dllm_name, trust_remote_code=True)
     dllm_tokenizer = target_tokenizer
+    # dllm_v1_tokenizer = AutoTokenizer.from_pretrained(dllm_v1_path, trust_remote_code=True)
+    dllm_v1_tokenizer = target_tokenizer
     if args.run_ar:
         draft_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
         draft_model = AutoModelForCausalLM.from_pretrained(
