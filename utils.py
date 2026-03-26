@@ -43,7 +43,7 @@ def format_drafter_name(args, drafter_config):
             return f"ar_None_df_{lowconf_threshold}_{max_spec_len}_{incr_len}"
         else:
             raise ValueError(f"Unknown freq_scheme for AR drafter: {freq_scheme}")
-    else:  # dllm
+    elif draft_type == "dllm":
         if freq_scheme == "sf":  # Fast-dLLM, static frequency
             return f"dllm_{drafter_threshold}_sf_{args.spec_len}"
         elif freq_scheme == "df":  # FailFast
@@ -53,6 +53,12 @@ def format_drafter_name(args, drafter_config):
                 return f"dllm_{drafter_threshold}_df_{lowconf_threshold}_{max_spec_len}_{incr_len}"
         else:
             raise ValueError(f"Unknown freq_scheme for dLLM drafter: {freq_scheme}")
+    elif draft_type == "dllm_v1":
+        if freq_scheme == "sf":
+            return f"dllm_v1_{drafter_threshold}_sf_{args.spec_len}"
+        raise ValueError(f"Unknown freq_scheme for Fast-dLLM-v1 drafter: {freq_scheme}")
+    else:
+        raise ValueError(f"Unknown draft_type: {draft_type}")
 
 
 

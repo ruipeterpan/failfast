@@ -9,6 +9,8 @@ import pprint
 import logging
 import argparse
 import transformers
+import importlib
+import importlib.util
 from tqdm import tqdm
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -311,6 +313,78 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
     return generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies
 
 
+_FAST_DLLM_V1_MODULES = None
+
+
+def _load_fast_dllm_v1_modules(args):
+    """Lazily import Fast-dLLM v1 generate/modeling modules together."""
+    global _FAST_DLLM_V1_MODULES
+    if _FAST_DLLM_V1_MODULES is not None:
+        return _FAST_DLLM_V1_MODULES
+
+    llada_dir = os.path.join(args.dllm_v1_dir, "llada")
+    generate_py = os.path.join(llada_dir, "generate.py")
+    modeling_py = os.path.join(llada_dir, "model", "modeling_llada.py")
+    if not os.path.exists(generate_py):
+        raise FileNotFoundError(
+            f"Could not find Fast-dLLM-v1 generate.py at: {generate_py}. "
+            "Please set --dllm_v1_dir to the Fast-dLLM repo root."
+        )
+    if not os.path.exists(modeling_py):
+        raise FileNotFoundError(
+            f"Could not find Fast-dLLM-v1 modeling file at: {modeling_py}. "
+            "Please set --dllm_v1_dir to the Fast-dLLM repo root."
+        )
+
+    if llada_dir not in sys.path:
+        sys.path.insert(0, llada_dir)
+
+    generate_spec = importlib.util.spec_from_file_location("fast_dllm_v1_generate", generate_py)
+    generate_module = importlib.util.module_from_spec(generate_spec)
+    generate_spec.loader.exec_module(generate_module)
+
+    modeling_module = importlib.import_module("model.modeling_llada")
+
+    _FAST_DLLM_V1_MODULES = (generate_module, modeling_module.LLaDAModelLM)
+    return _FAST_DLLM_V1_MODULES
+
+
+def get_next_n_tokens_dllm_v1(dllm_v1, args, orig_model_inputs, token_ids_so_far, spec_len, threshold):
+    """Get next n speculative tokens from Fast-dLLM-v1 (LLaDA backend)."""
+    generator_mod, _ = _load_fast_dllm_v1_modules(args)
+    if args.dllm_v1_generate_mode == "generate":
+        generator_fn = generator_mod.generate
+    elif args.dllm_v1_generate_mode == "prefix_cache":
+        generator_fn = generator_mod.generate_with_prefix_cache
+    elif args.dllm_v1_generate_mode == "dual_cache":
+        generator_fn = generator_mod.generate_with_dual_cache
+    else:
+        raise ValueError(f"Unknown --dllm_v1_generate_mode: {args.dllm_v1_generate_mode}")
+
+    device = dllm_v1.device
+    new_tokens = torch.tensor(token_ids_so_far, device=device, dtype=torch.long).unsqueeze(0)
+    prompt = torch.cat([orig_model_inputs["input_ids"].to(device), new_tokens], dim=1)
+    prompt_len = prompt.shape[1]
+
+    gen_length = int(spec_len)
+    steps = gen_length  # ensures steps % num_blocks == 0 when gen_length % block_length == 0
+
+    generated_ids, num_forward_passes = generator_fn(
+        dllm_v1,
+        prompt,
+        steps=steps,
+        gen_length=gen_length,
+        block_length=args.block_size,
+        temperature=0.0,
+        remasking="low_confidence",
+        threshold=threshold,
+    )
+
+    generated_ids = generated_ids[0][prompt_len:prompt_len + spec_len].tolist()
+    forward_pass_latencies = []
+    return generated_ids, num_forward_passes, forward_pass_latencies
+
+
 def construct_drafter_configs(args):
     drafter_configs = []
     if args.run_ar:  # AR Drafter
@@ -324,6 +398,8 @@ def construct_drafter_configs(args):
             ])
     if args.run_dllm_sf:  # Fast-dLLM Drafter
         drafter_configs.extend([("dllm", thr, "sf", None, None, None) for thr in args.drafter_thresholds])
+    if args.run_dllm_v1_sf:  # Fast-dLLM-v1 Drafter (LLaDA backend)
+        drafter_configs.extend([("dllm_v1", thr, "sf", None, None, None) for thr in args.drafter_thresholds])
     if not args.baseline_sweep:  # FailFast Drafter
         drafter_configs.extend([("dllm", thr, "df", lowconf_threshold, max_spec_len, incr_len) 
                                 for thr in args.drafter_thresholds
@@ -344,6 +420,10 @@ parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-32B-I
                     help="Name of the base model to use")
 parser.add_argument("--dllm_dir", type=str, default="/data2/ruipan/Fast_dLLM_v2_1.5B", 
                     help="Dir to the dLLM weights and (modified) modeling.py")
+parser.add_argument("--dllm_v1_dir", type=str, default="/scratch/gpfs/RAVIAN/zhuofuc/Fast-dLLM",
+                    help="Path to Fast-dLLM repo root (expects llada/generate.py inside)")
+parser.add_argument("--dllm_v1_generate_mode", type=str, default="generate", choices=["generate", "prefix_cache", "dual_cache"],
+                    help="Fast-dLLM-v1 generation backend")
 parser.add_argument("--num_questions", type=int, default=1,
                     help="Number of questions to run profiling on")
 parser.add_argument("--max_new_tokens", type=int, default=1024,
@@ -374,6 +454,7 @@ parser.add_argument("--sweep_incr_len", type=int, nargs="+",
 parser.add_argument('--run_ar', action='store_true', help='Run the AR drafter to compare speedups')
 parser.add_argument('--ar_dynamic', action='store_true', help='Also run the AR drafter in dynamic mode (FailFast-style stop condition)')
 parser.add_argument('--run_dllm_sf', action='store_true', help='Run the dLLM drafter with static frequency (in param sweep for baselines)')
+parser.add_argument('--run_dllm_v1_sf', action='store_true', help='Run Fast-dLLM-v1 (LLaDA) drafter with static frequency')
 parser.add_argument('--baseline_sweep', action='store_true', help='Running a baseline sweep, don\'t run dynamic frequency')
 parser.add_argument('--overwrite', action='store_true', help='Overwrite existing output pickles and figures')
 parser.add_argument('--reuse_drafts', action='store_true', help='Reuses drafted tokens from previous rounds if possible -- see Appendix E.')
@@ -436,13 +517,31 @@ if not args.read_pickle:
         torch_dtype="auto",
         device_map="auto"
     )
-    dllm_name = "Efficient-Large-Model/Fast_dLLM_v2_1.5B"
-    dllm = AutoModelForCausalLM.from_pretrained(
-        args.dllm_dir if args.dllm_dir is not None else dllm_name,
-        torch_dtype="auto",
-        device_map="auto",
-        trust_remote_code=True
-    )
+    dllm = None
+    dllm_v1 = None
+
+    need_dllm = any(x[0] == "dllm" for x in args.drafter_configs)
+    need_dllm_v1 = any(x[0] == "dllm_v1" for x in args.drafter_configs)
+
+    if need_dllm:
+        dllm_name = "Efficient-Large-Model/Fast_dLLM_v2_1.5B"
+        dllm = AutoModelForCausalLM.from_pretrained(
+            args.dllm_dir if args.dllm_dir is not None else dllm_name,
+            torch_dtype="auto",
+            device_map="auto",
+            trust_remote_code=True
+        )
+    if need_dllm_v1:
+        _, LLaDAModelLM = _load_fast_dllm_v1_modules(args)
+        dllm_v1_name = "GSAI-ML/LLaDA-8B-Instruct"
+        dllm_v1_device = "cuda" if torch.cuda.is_available() else "cpu"
+        dllm_v1 = LLaDAModelLM.from_pretrained(
+            dllm_v1_name,
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
+        ).to(dllm_v1_device).eval()
+        # Keep parity with llada/chat.py loading; this tokenizer is not used for verification.
+        dllm_v1_tokenizer = AutoTokenizer.from_pretrained(dllm_v1_name, trust_remote_code=True)
     # NOTE(ruipan): drafter and target should probably share the same tokenizer?
     # dllm_tokenizer = AutoTokenizer.from_pretrained(dllm_name, trust_remote_code=True)
     dllm_tokenizer = target_tokenizer
@@ -582,6 +681,18 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                                     )
                         prev_prefill_output = prefill_output
                         spec_len = actual_spec_len  # update spec_len to the actual number of tokens proposed
+                elif draft_type == "dllm_v1":
+                    if freq_scheme != "sf":
+                        raise NotImplementedError("Fast-dLLM-v1 currently supports static-frequency drafting only.")
+                    spec_len = args.spec_len
+                    draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm_v1(
+                        dllm_v1,
+                        args,
+                        orig_model_inputs,
+                        current_token_ids,
+                        spec_len=spec_len,
+                        threshold=drafter_threshold,
+                    )
                         
                 total_num_forward_passes += num_forward_passes
                 # print(f"forward_pass_latencies {forward_pass_latencies}")  # NOTE(ruipan): TPT of 1.5B dLLM is similar to 1.5B AR model
@@ -723,14 +834,15 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
         pickled_data["acceptance_rate"] = acceptance_rate
         pickled_data["total_output_tokens"] = total_output_tokens  # not necessarily equal to num_target_tokens
         
-        if (args.overwrite and not args.read_pickle) or (not os.path.exists(os.path.join(output_dir_pickles, f"{args.max_new_tokens}.pickle"))):
-            with open(os.path.join(output_dir_pickles, f"{args.max_new_tokens}.pickle"), "wb") as f:
+        pickle_path = os.path.join(output_dir_pickles, f"{args.max_new_tokens}.pickle")
+        if (args.overwrite and not args.read_pickle) or (not os.path.exists(pickle_path)):
+            with open(pickle_path, "wb") as f:
                 pickle.dump(pickled_data, f)
-                logging.info(f"Saved pickled data to {os.path.join(output_dir_pickles, f"{args.max_new_tokens}.pickle")}")
+                logging.info(f"Saved pickled data to {pickle_path}")
             with open(os.path.join(output_dir_pickles, f"{args.max_new_tokens}.txt"), "w") as f:
                 pp = pprint.PrettyPrinter(width=1000, stream=f)  # large enough to fit list
                 pp.pprint(pickled_data)
         else:
-            logging.info(f"Skipping save for pickled data to {os.path.join(output_dir_pickles, f"{args.max_new_tokens}.pickle")}")
+            logging.info(f"Skipping save for pickled data to {pickle_path}")
 
 # %%
