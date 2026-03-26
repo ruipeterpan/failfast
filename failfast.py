@@ -9,6 +9,7 @@ import pprint
 import logging
 import argparse
 import transformers
+import importlib
 import importlib.util
 from tqdm import tqdm
 
@@ -343,9 +344,7 @@ def _load_fast_dllm_v1_modules(args):
     generate_module = importlib.util.module_from_spec(generate_spec)
     generate_spec.loader.exec_module(generate_module)
 
-    modeling_spec = importlib.util.spec_from_file_location("fast_dllm_v1_modeling", modeling_py)
-    modeling_module = importlib.util.module_from_spec(modeling_spec)
-    modeling_spec.loader.exec_module(modeling_module)
+    modeling_module = importlib.import_module("model.modeling_llada")
 
     _FAST_DLLM_V1_MODULES = (generate_module, modeling_module.LLaDAModelLM)
     return _FAST_DLLM_V1_MODULES
@@ -360,8 +359,7 @@ def _resolve_local_snapshot_path(model_name_or_path):
     except Exception:
         return model_name_or_path
 
-
-def get_next_n_tokens_dllm_v1(dllm_v1, args, orig_model_inputs, token_ids_so_far, spec_len, threshold):
+def get_next_n_tokens_dllm_v1(dllm_v1, args, orig_model_inputs, token_ids_so_far, spec_len, small_block_size, threshold):
     """Get next n speculative tokens from Fast-dLLM-v1 (LLaDA backend)."""
     generator_mod, _ = _load_fast_dllm_v1_modules(args)
     if args.dllm_v1_generate_mode == "generate":
@@ -378,15 +376,11 @@ def get_next_n_tokens_dllm_v1(dllm_v1, args, orig_model_inputs, token_ids_so_far
     prompt = torch.cat([orig_model_inputs["input_ids"].to(device), new_tokens], dim=1)
     prompt_len = prompt.shape[1]
 
-    gen_length = int(spec_len)
-    steps = gen_length  # ensures steps % num_blocks == 0 when gen_length % block_length == 0
-
     generated_ids, num_forward_passes = generator_fn(
         dllm_v1,
         prompt,
-        steps=steps,
-        gen_length=gen_length,
-        block_length=args.block_size,
+        gen_length=args.block_size, # total number of tokens to generate this call (the drafted length budget).
+        block_length=small_block_size, # size of each semi-AR block.
         temperature=0.0,
         remasking="low_confidence",
         threshold=threshold,
@@ -705,6 +699,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                         orig_model_inputs,
                         current_token_ids,
                         spec_len=spec_len,
+                        small_block_size=args.small_block_size,
                         threshold=drafter_threshold,
                     )
                         
