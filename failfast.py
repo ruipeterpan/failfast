@@ -28,32 +28,8 @@ from utils import (
 )
 
 # %%
-def get_target_token_ids(model, tokenizer, messages, max_new_tokens):
-    """Get the target series of token IDs for the given messages.
-    """
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True
-    )
-    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-    num_input_tokens = model_inputs.input_ids.shape[1]
-    logging.debug(f"num_input_tokens {num_input_tokens}, first eight tokens: {model_inputs.input_ids[0, :8].tolist()}")
-    
-    generated_ids = model.generate(
-        **model_inputs,
-        max_new_tokens=max_new_tokens,
-        do_sample=False,  # use greedy decoding, not sampling; overrides all below sampling params
-        # temperature=0.0, top_p=1.0, top_k=0.0,
-    )
-    generated_ids = [
-        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
-    
-    return generated_ids[0].tolist(), model_inputs
 
-
-def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n):
+def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n, temperature):
     """Get the next n tokens from the model given the token IDs so far.
     """
     new_tokens = torch.tensor(token_ids_so_far, device=orig_model_inputs['input_ids'].device, dtype=torch.long).unsqueeze(0)
@@ -76,7 +52,8 @@ def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n):
     generate_output = model.generate(
         **new_model_inputs,
         max_new_tokens=n,
-        do_sample=False,  # use greedy decoding
+        do_sample=True,  # use greedy decoding
+        temperature=temperature,
         output_scores=True,
         return_dict_in_generate=True,
     )
@@ -84,15 +61,24 @@ def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n):
     # Extract generated token IDs (excluding the input)
     generated_ids = generate_output.sequences[0][len(new_model_inputs["input_ids"][0]):]
     
-    # return the list of confidence scores
-    scores = generate_output.scores
-    confidences = []
-    for i, (token_id, score_logits) in enumerate(zip(generated_ids, scores)):
-        probs = torch.softmax(score_logits, dim=-1)
-        conf = probs[0, token_id].item()
-        confidences.append(conf)
+    # Get Q(x): Calculate the full probability distribution for each generated step
+    draft_probs =[]
+    for logits in generate_output.scores:
+        # Scale by temperature and apply softmax
+        probs = torch.softmax(logits[0] / temperature, dim=-1)
+        draft_probs.append(probs)
     
-    return generated_ids.tolist(), confidences
+    
+    # # return the list of confidence scores
+    # scores = generate_output.scores
+    # confidences = []
+    # for i, (token_id, score_logits) in enumerate(zip(generated_ids, scores)):
+    #     probs = torch.softmax(score_logits, dim=-1)
+    #     conf = probs[0, token_id].item()
+    #     confidences.append(conf)
+    confidences = []
+    
+    return generated_ids.tolist(), confidences, draft_probs
 
 
 def get_next_tokens_ar(
@@ -184,7 +170,7 @@ def get_next_tokens_ar(
     return drafted, confidences
 
 
-def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_len, output_seqlen, small_block_size, threshold, is_drafter, prev_prefill_output=None):
+def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_len, output_seqlen, small_block_size, threshold, is_drafter, prev_prefill_output=None, temperature=1.0):
     """Get the next n tokens from the model given the token IDs so far.
     """
     num_tokens_in_prompt = orig_model_inputs.input_ids.shape[1]
@@ -198,7 +184,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
     }
 
     if args.disable_reusing_drafter_kvs:
-        generated_ids, num_forward_passes, forward_pass_latencies = dllm.generate_draft_tokens(
+        generated_ids, num_forward_passes, forward_pass_latencies, draft_probs = dllm.generate_draft_tokens(
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
             small_block_size=small_block_size,
@@ -206,7 +192,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
-            temperature=0.0,
+            temperature=temperature,
             top_p=1.0,
             top_k=0.0,
             # use_block_cache=True,  # NOTE(ruipan): doesn't seem to make a difference in latency, prob because we are running a 1.5B model, which is memory-bound
@@ -216,7 +202,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             args=args,
         )
     else:
-        generated_ids, prefill_output, num_forward_passes, forward_pass_latencies = dllm.generate_draft_tokens(
+        generated_ids, prefill_output, num_forward_passes, forward_pass_latencies, draft_probs = dllm.generate_draft_tokens(
             # **new_model_inputs,
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
@@ -225,7 +211,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
-            temperature=0.0,
+            temperature=temperature,
             top_p=1.0,
             top_k=0.0,
             # use_block_cache=True,
@@ -246,8 +232,8 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
         logging.info(f"{Colors.RED}Generated ids contain {special_token} tokens! {generated_ids}{Colors.RESET}")
     
     if not args.disable_reusing_drafter_kvs:
-        return generated_ids, prefill_output, num_forward_passes, forward_pass_latencies
-    return generated_ids, num_forward_passes, forward_pass_latencies
+        return generated_ids, prefill_output, num_forward_passes, forward_pass_latencies, draft_probs
+    return generated_ids, num_forward_passes, forward_pass_latencies, draft_probs
 
 
 def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_len, output_seqlen, small_block_size, threshold, is_drafter, prev_prefill_output=None,
@@ -255,6 +241,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
                         max_spec_len=None,
                         incr_len=None,
                         last_round_rejected=None,
+                        temperature=1.0,
     ):
     """Get the next few tokens from the model given the token IDs so far.
     Difference is that the dLLM drafter itself determines how many tokens to output based on model internal signals.
@@ -270,7 +257,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
     }
 
     if args.disable_reusing_drafter_kvs:
-        generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens = dllm.generate_draft_tokens_arbitrary_length(
+        generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens, draft_probs = dllm.generate_draft_tokens_arbitrary_length(
             # **new_model_inputs,
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
@@ -279,7 +266,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
-            temperature=0.0,
+            temperature=temperature,
             top_p=1.0,
             top_k=0.0,
             # use_block_cache=True,
@@ -293,7 +280,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             last_round_rejected=last_round_rejected,
         )
     else:
-        generated_ids, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens = dllm.generate_draft_tokens_arbitrary_length(
+        generated_ids, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens, draft_probs = dllm.generate_draft_tokens_arbitrary_length(
             # **new_model_inputs,
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
@@ -301,7 +288,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
-            temperature=0.0,
+            temperature=temperature,
             top_p=1.0,
             top_k=0.0,
             # use_block_cache=True,
@@ -326,8 +313,8 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
         logging.info(f"{Colors.RED}Generated ids contain {special_token} tokens! {generated_ids}{Colors.RESET}")
     
     if not args.disable_reusing_drafter_kvs:
-        return generated_ids, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens
-    return generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens
+        return generated_ids, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens, draft_probs
+    return generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies, conf_of_unmasked_tokens, draft_probs
 
 
 def construct_drafter_configs(args):
@@ -371,6 +358,8 @@ parser.add_argument("--block_size", type=int, default=32,
                     help="Block size in Fast-dLLM")
 parser.add_argument("--small_block_size", type=int, default=8,
                     help="Small block size in Fast-dLLM")
+parser.add_argument("--temperature", type=float, default=1.0,
+                    help="Temperature for sampling")
 parser.add_argument("--spec_len", type=int, default=10,
                     help="Frequency of verification steps (in number of tokens)")
 parser.add_argument("--drafter_thresholds", type=float, nargs="+",  # one or more float thresholds
@@ -415,10 +404,10 @@ args, _ = parser.parse_known_args()
 # args.spec_len = 16
 # args.block_size = 32
 # args.small_block_size = 16
-# args.run_dllm_sf = True
+args.run_dllm_sf = True
 # args.read_pickle = True  # XXX: read trajectory from pickle as well in future debugging
-# args.target_model_name = "Qwen/Qwen2.5-7B-Instruct"  # for easier debugging
-# args.sweep_lowconf_threshold = [0.4]
+args.target_model_name = "Qwen/Qwen2.5-7B-Instruct"  # for easier debugging
+args.sweep_lowconf_threshold = [0.1, 0.2, 0.3, 0.4]
 # args.sweep_max_spec_len = [96]
 # args.sweep_incr_len = [16]
 ######custom fields for easier debugging######
@@ -540,10 +529,11 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                 # A. PROPOSE: Get next n speculative tokens from draft model based on current accepted prefix
                 if draft_type == "ar":
                     if freq_scheme == "sf":
-                        draft_proposal, confidences = get_next_n_tokens_ar(draft_model, orig_model_inputs, current_token_ids, n=args.spec_len)
+                        draft_proposal, confidences, draft_probs = get_next_n_tokens_ar(draft_model, orig_model_inputs, current_token_ids, n=args.spec_len, temperature=args.temperature)
                         spec_len = args.spec_len
                         # logging.info(f"[Round {num_speculation_rounds}] AR drafter confidences {confidences}")
                     else:
+                        assert False, "T=1 doesn't support dynamic frequency in current implementation"  # can implement if needed, but not a priority since AR drafter is just a baseline for speed comparison, and dLLM drafter is the main focus for dynamic frequency
                         draft_proposal, confidences = get_next_tokens_ar(
                             draft_model,
                             orig_model_inputs,
@@ -568,15 +558,16 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                                     threshold=drafter_threshold,
                                                                     is_drafter=True,)
                         else:
-                            draft_proposal, prefill_output, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
+                            draft_proposal, prefill_output, num_forward_passes, forward_pass_latencies, draft_probs = get_next_n_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 2 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
                                                                     small_block_size=args.small_block_size,
                                                                     threshold=drafter_threshold,
                                                                     is_drafter=True,
-                                                                    prev_prefill_output=prev_prefill_output)
+                                                                    prev_prefill_output=prev_prefill_output,
+                                                                    temperature=1.0)
                             prev_prefill_output = prefill_output
-                        confidences = None  # NOTE(ruipan): placeholder
+                        confidences = []  # NOTE(ruipan): placeholder
                     else:  # dynamic frequency: drafter determines how many tokens to propose
                         ###start of logic of reusing rejected drafts from the last round###
                         last_round_proposal = pickled_data["stats_each_round"][-1]["~draft_proposal"] if num_speculation_rounds > 0 else []
@@ -590,7 +581,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                             last_round_rejected = None
                         ###end of logic of reusing rejected drafts from the last round###
                         
-                        draft_proposal, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies, confidences = get_next_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
+                        draft_proposal, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies, confidences, draft_probs = get_next_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=args.spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 3 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
                                                                     small_block_size=args.small_block_size,
@@ -601,6 +592,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                                     max_spec_len=max_spec_len,
                                                                     incr_len=incr_len,
                                                                     last_round_rejected=last_round_rejected,
+                                                                    temperature=1.0,
                                                                     )
                         prev_prefill_output = prefill_output
                         spec_len = actual_spec_len  # update spec_len to the actual number of tokens proposed
@@ -633,8 +625,9 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                     start_index = orig_model_inputs['input_ids'].shape[1] + prefix_len - 1
                     end_index = start_index + len(draft_proposal)
                     verify_logits = outputs.logits[0, start_index:end_index]
-                    target_tokens = torch.argmax(verify_logits, dim=-1).tolist()
-                
+                    # target_tokens = torch.argmax(verify_logits, dim=-1).tolist()
+                    target_probs = torch.softmax(verify_logits / args.temperature, dim=-1)
+                                    
                 # # add stopping condition if drafter proposes EOS token?
                 # if draft_proposal and draft_proposal[-1] == target_tokenizer.eos_token_id:
                 #     logging.info(f"{Colors.YELLOW}Drafter proposed EOS token. Stopping speculation.{Colors.RESET}")
@@ -644,23 +637,53 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                 accepted_len = 0
                 bonus_token = None
                 for i in range(len(draft_proposal)):
-                    # The target's prediction for position `i` is the argmax of the logits at position `i`
-                    target_pred = torch.argmax(verify_logits[i, :], dim=-1).item()
-                    # print(f"  Verifying draft token at position {i}: {draft_proposal[i]}. Target would have picked {target_pred}.")
-
-                    # if target_pred == target_tokenizer.eos_token_id:
-                    #     logging.info(f"{Colors.GREEN}Round {num_speculation_rounds} proposed EOS token at position {i}, draft_proposal {draft_proposal}.{Colors.RESET}")
-
-                    if draft_proposal[i] == target_pred:
+                    token = draft_proposal[i]
+    
+                    # Target prob (squeeze to 1D just in case)
+                    t_prob_tensor = target_probs[i].squeeze()
+                    p_target = t_prob_tensor[token].item() if token < t_prob_tensor.size(-1) else 0.0
+                    
+                    # Draft prob (squeeze the batch dimension to make it 1D:[vocab_size])
+                    d_prob_tensor = draft_probs[i].squeeze()
+                    p_draft = d_prob_tensor[token].item() if token < d_prob_tensor.size(-1) else 0.0
+                    
+                    # Calculate acceptance probability
+                    if p_draft <= 0.0:
+                        acceptance_prob = 1.0 
+                    else:
+                        acceptance_prob = min(1.0, p_target / p_draft)
+                        
+                    # Coin flip
+                    if torch.rand(1).item() < acceptance_prob:
+                        # ACCEPT
                         accepted_len += 1
                     else:
-                        # Mismatch found. The correct token is the target's prediction.
-                        final_token = target_pred
+                        # REJECT: Mismatch found. Resample from the residual distribution.
+                        
+                        # Match dimensions by padding the smaller distribution with 0.0s
+                        if t_prob_tensor.size(-1) > d_prob_tensor.size(-1):
+                            pad_len = t_prob_tensor.size(-1) - d_prob_tensor.size(-1)
+                            d_prob_tensor = torch.nn.functional.pad(d_prob_tensor, (0, pad_len), value=0.0)
+                        elif d_prob_tensor.size(-1) > t_prob_tensor.size(-1):
+                            pad_len = d_prob_tensor.size(-1) - t_prob_tensor.size(-1)
+                            t_prob_tensor = torch.nn.functional.pad(t_prob_tensor, (0, pad_len), value=0.0)
+                        
+                        # 1. Subtract draft probs from target probs, floor at 0
+                        residual_probs = torch.clamp(t_prob_tensor - d_prob_tensor, min=0.0)
+                        
+                        # 2. Re-normalize to make it a valid probability distribution
+                        residual_probs = residual_probs / (residual_probs.sum() + 1e-9)
+                        
+                        # 3. Sample the corrected final token
+                        final_token = torch.multinomial(residual_probs, 1).item()
                         break
                 else:
                     # All draft tokens were accepted. Get a "bonus" token from the final logit.
                     final_token_logits = outputs.logits[0, -1, :]
-                    final_token = torch.argmax(final_token_logits, dim=-1).item()
+                    # final_token = torch.argmax(final_token_logits, dim=-1).item()
+                    # bonus_token = final_token
+                    bonus_probs = torch.softmax(final_token_logits / args.temperature, dim=-1)
+                    final_token = torch.multinomial(bonus_probs, 1).item()
                     bonus_token = final_token
                     # print(f"  All draft tokens accepted! Bonus token is {final_token}.")
                 
@@ -678,7 +701,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                 rejected_tokens += len(draft_proposal) - accepted_len
                 
                 info_this_round = {
-                    "target_tokens": target_tokens,  # useful up until the first rejection/mismatch
+                    # "target_tokens": target_tokens,  # useful up until the first rejection/mismatch
                     "prefix_len": prefix_len,  # number of decoded tokens before this round
                     "spec_len": spec_len,  # number of speculated tokens
                     "~draft_proposal": draft_proposal,  # list of speculated token IDs
