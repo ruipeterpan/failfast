@@ -1,6 +1,7 @@
 # %%
 import os
 import sys
+import io
 import copy
 import time
 import torch
@@ -11,6 +12,8 @@ import argparse
 import transformers
 import importlib
 import importlib.util
+from argparse import Namespace
+from contextlib import redirect_stdout
 from tqdm import tqdm
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -419,6 +422,134 @@ def get_next_n_tokens_dllm_v1(dllm_v1, args, orig_model_inputs, token_ids_so_far
     return generated_ids, num_forward_passes, forward_pass_latencies
 
 
+# ---------------------------------------------------------------------------
+# DiffuLLaMA drafter (diffusionfamily/diffullama)
+# ---------------------------------------------------------------------------
+
+_DIFFULLAMA_MODULES = None
+
+
+def _load_diffullama_modules(args):
+    """Lazily import DiffuLLaMA attention_patch + model modules.
+
+    The attention patch monkey-patches LlamaModel.forward to accept 4D masks.
+    It is backward-compatible: for 2D masks (used by the target model) the
+    original causal behaviour is preserved.
+    """
+    global _DIFFULLAMA_MODULES
+    if _DIFFULLAMA_MODULES is not None:
+        return _DIFFULLAMA_MODULES
+
+    diffullama_dir = args.diffullama_dir
+    model_py = os.path.join(diffullama_dir, "model.py")
+    attention_patch_py = os.path.join(diffullama_dir, "attention_patch.py")
+    for path in (model_py, attention_patch_py):
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Could not find DiffuLLaMA file at: {path}. "
+                "Please set --diffullama_dir to the DiffuLLaMA repo root."
+            )
+
+    if diffullama_dir not in sys.path:
+        sys.path.insert(0, diffullama_dir)
+
+    # Load the attention patch module
+    attn_spec = importlib.util.spec_from_file_location("diffullama_attention_patch", attention_patch_py)
+    attn_module = importlib.util.module_from_spec(attn_spec)
+    attn_spec.loader.exec_module(attn_module)
+
+    # Save originals BEFORE patching so we can restore them after DiffuLLaMA is built.
+    orig_llama_model_fwd = transformers.models.llama.modeling_llama.LlamaModel.forward
+    orig_decoder_fwd = transformers.models.llama.modeling_llama.LlamaDecoderLayer.forward
+
+    # Replace attention_patch.replace_attention_mask with a version that tolerates
+    # transformers ≥4.46 where LlamaFlashAttention2 no longer exists.
+    # Must happen before model.py is imported, since model.py calls it at load time.
+    # NOTE: patch is applied class-level temporarily (for model.py import); after
+    # DiffuLLaMA is constructed the caller restores originals and re-binds instance-level.
+    def _safe_replace_attention_mask():
+        transformers.models.llama.modeling_llama.LlamaModel.forward = attn_module.forward_llama2
+        if hasattr(transformers.models.llama.modeling_llama, "LlamaFlashAttention2"):
+            transformers.models.llama.modeling_llama.LlamaFlashAttention2.forward = attn_module.forward_llama2fa2
+        transformers.models.gpt2.modeling_gpt2.GPT2Model.forward = attn_module.forward_gpt2
+        # NOTE: Do NOT wrap LlamaDecoderLayer at class level here — done per-instance
+        # after DiffuLLaMA construction to avoid breaking the target model.
+
+    attn_module.replace_attention_mask = _safe_replace_attention_mask
+    _safe_replace_attention_mask()
+    # Register under the canonical name so model.py's `from attention_patch import ...`
+    # picks up our patched module instead of the original.
+    sys.modules["attention_patch"] = attn_module
+
+    # Load model module
+    model_spec = importlib.util.spec_from_file_location("diffullama_model", model_py)
+    model_module = importlib.util.module_from_spec(model_spec)
+    model_spec.loader.exec_module(model_module)
+
+    _DIFFULLAMA_MODULES = (
+        model_module.DiscreteDiffusionModel,
+        model_module.generate_samples,
+        attn_module,
+        orig_llama_model_fwd,
+        orig_decoder_fwd,
+    )
+    return _DIFFULLAMA_MODULES
+
+
+def get_next_n_tokens_diffullama(diffullama, args, orig_model_inputs, token_ids_so_far, spec_len, diffusion_steps):
+    """Draft `spec_len` tokens using DiffuLLaMA (static-frequency).
+
+    DiffuLLaMA is a discrete diffusion LM that fills all masked positions
+    simultaneously via iterative denoising.  The calling convention mirrors
+    ``get_next_n_tokens_dllm_v1``:
+
+    Returns:
+        (draft_tokens: list[int], num_forward_passes: int, forward_pass_latencies: list)
+    """
+    _, generate_samples_fn, *_ = _load_diffullama_modules(args)
+    diff_args = Namespace(
+        shift=args.diffullama_args.shift,
+        diffusion_steps=diffusion_steps,
+        logits_temp=args.diffullama_args.logits_temp,
+        topp_temp=args.diffullama_args.topp_temp,
+    )
+    tokenizer = args.diffullama_tokenizer
+
+    # Build full prefix: original prompt tokens + accepted tokens so far
+    prefix_ids = orig_model_inputs["input_ids"][0].tolist() + token_ids_so_far
+    gen_len = spec_len
+
+    x0 = prefix_ids + [0] * gen_len
+    src_mask = [1] * len(prefix_ids) + [0] * gen_len
+
+    inputs = {
+        "input_ids": torch.tensor([x0], dtype=torch.long),
+        "src_mask": torch.tensor([src_mask], dtype=torch.long),
+    }
+
+    # Suppress the "*** Start sampling..." print inside generate_samples
+    buf = io.StringIO()
+    with torch.no_grad(), redirect_stdout(buf):
+        result = generate_samples_fn(diffullama, diff_args, tokenizer, inputs)
+
+    # After shift removal the output has shape (1, len(prefix_ids) + gen_len - 1).
+    # The generated tokens occupy indices [len(prefix_ids)-1 : len(prefix_ids)-1+gen_len].
+    start = len(prefix_ids) - 1
+    draft_tokens = result[0][start : start + gen_len].tolist()
+
+    # Warn if any token exceeds the target vocab (should not happen in practice)
+    target_vocab_size = args.target_tokenizer.vocab_size
+    for tok in draft_tokens:
+        if tok >= target_vocab_size:
+            logging.warning(
+                f"[diffullama] Out-of-range token {tok} (target vocab_size={target_vocab_size})"
+            )
+
+    # Each generate_samples call performs diffusion_steps forward passes
+    num_forward_passes = diff_args.diffusion_steps
+    return draft_tokens, num_forward_passes, []
+
+
 def construct_drafter_configs(args):
     drafter_configs = []
     if args.run_ar:  # AR Drafter
@@ -434,6 +565,8 @@ def construct_drafter_configs(args):
         drafter_configs.extend([("dllm", thr, "sf", None, None, None) for thr in args.drafter_thresholds])
     if args.run_dllm_v1_sf:  # Fast-dLLM-v1 Drafter (LLaDA backend)
         drafter_configs.extend([("dllm_v1", thr, "sf", None, None, None) for thr in args.drafter_thresholds])
+    if args.run_diffullama_sf:  # DiffuLLaMA Drafter (diffusionfamily/diffullama)
+        drafter_configs.extend([("diffullama", steps, "sf", None, None, None) for steps in args.diffullama_diffusion_steps])
     if not args.baseline_sweep:  # FailFast Drafter
         drafter_configs.extend([("dllm", thr, "df", lowconf_threshold, max_spec_len, incr_len) 
                                 for thr in args.drafter_thresholds
@@ -489,6 +622,11 @@ parser.add_argument('--run_ar', action='store_true', help='Run the AR drafter to
 parser.add_argument('--ar_dynamic', action='store_true', help='Also run the AR drafter in dynamic mode (FailFast-style stop condition)')
 parser.add_argument('--run_dllm_sf', action='store_true', help='Run the dLLM drafter with static frequency (in param sweep for baselines)')
 parser.add_argument('--run_dllm_v1_sf', action='store_true', help='Run Fast-dLLM-v1 (LLaDA) drafter with static frequency')
+parser.add_argument('--run_diffullama_sf', action='store_true', help='Run DiffuLLaMA (diffusionfamily/diffullama) drafter with static frequency')
+parser.add_argument('--diffullama_dir', type=str, default="/scratch/gpfs/RAVIAN/zhuofuc/DiffuLLaMA",
+                    help="Path to DiffuLLaMA repo root (expects model.py, attention_patch.py inside)")
+parser.add_argument('--diffullama_diffusion_steps', type=int, nargs="+", default=[64],
+                    help="Diffusion denoising steps per draft call; multiple values run a sweep (e.g., --diffullama_diffusion_steps 10 32 64)")
 parser.add_argument('--baseline_sweep', action='store_true', help='Running a baseline sweep, don\'t run dynamic frequency')
 parser.add_argument('--overwrite', action='store_true', help='Overwrite existing output pickles and figures')
 parser.add_argument('--reuse_drafts', action='store_true', help='Reuses drafted tokens from previous rounds if possible -- see Appendix E.')
@@ -536,8 +674,10 @@ args.latency = {  # all in ms
             "Qwen2.5-7B-Instruct": 13.5,
             "Qwen2.5-14B-Instruct": 24.7,
             "Qwen2.5-32B-Instruct": 52.6,
-            # TODO: get the actual TPT for Meta-Llama-3-70B-Instruct
+            # TODO: get the actual TPT for following models
             "Meta-Llama-3-70B-Instruct": 1000,
+            "Llama-2-13b-chat-hf": 1000,
+            "Llama-2-70b-chat-hf": 1000,
         },
     },
 }
@@ -556,9 +696,11 @@ if not args.read_pickle:
     )
     dllm = None
     dllm_v1 = None
+    diffullama = None
 
     need_dllm = any(x[0] == "dllm" for x in args.drafter_configs)
     need_dllm_v1 = any(x[0] == "dllm_v1" for x in args.drafter_configs)
+    need_diffullama = any(x[0] == "diffullama" for x in args.drafter_configs)
 
     if need_dllm:
         dllm_name = "Efficient-Large-Model/Fast_dLLM_v2_1.5B"
@@ -583,6 +725,67 @@ if not args.read_pickle:
     dllm_tokenizer = target_tokenizer
     # dllm_v1_tokenizer = AutoTokenizer.from_pretrained(dllm_v1_path, trust_remote_code=True)
     dllm_v1_tokenizer = target_tokenizer
+    if need_diffullama:
+        # Load DiffuLLaMA modules (applies attention patch as a side-effect)
+        DiscreteDiffusionModel, _, _diffullama_attn_module, _orig_llama_model_fwd, _orig_decoder_fwd = _load_diffullama_modules(args)
+        from transformers import AutoConfig, LlamaForCausalLM
+        diffullama_model_name = "diffusionfamily/diffullama"
+        diffullama_path = _resolve_local_snapshot_path(diffullama_model_name)
+        logging.info(f"{Colors.BOLD}=== Loading DiffuLLaMA drafter: {diffullama_model_name} ==={Colors.RESET}")
+        diffullama_config = AutoConfig.from_pretrained(diffullama_path)
+        diffullama_tokenizer = AutoTokenizer.from_pretrained(diffullama_path)
+        diffullama_base = LlamaForCausalLM.from_pretrained(
+            diffullama_path,
+            torch_dtype=torch.bfloat16,
+            _attn_implementation="eager",
+            # Do NOT use device_map — accelerate would split layers across GPUs and
+            # generate_samples's single-device torch.cat calls would break.
+            # Load to CPU, then move the whole model to GPU 0 below.
+        )
+        diffullama = DiscreteDiffusionModel(
+            model=diffullama_base,
+            config=diffullama_config,
+            tokenizer=diffullama_tokenizer,
+            device="cuda:0",
+        ).to("cuda:0")
+        diffullama.eval()
+        # Disable KV cache — DiffuLLaMA uses bidirectional attention and never needs it.
+        diffullama.denoise_model.config.use_cache = False
+
+        # --- Instance-level patching (transformers ≥4.57 compatibility) ---
+        # The class-level forward_llama2 patch was needed for model.py import.
+        # Now restore the original class-level LlamaModel.forward so the target
+        # model uses the standard transformers forward (no _update_causal_mask call).
+        import types as _types
+        transformers.models.llama.modeling_llama.LlamaModel.forward = _orig_llama_model_fwd
+        # Bind forward_llama2 to diffullama.denoise_model instance only.
+        diffullama.denoise_model.forward = _types.MethodType(
+            _diffullama_attn_module.forward_llama2, diffullama.denoise_model
+        )
+        # In transformers ≥4.57, LlamaDecoderLayer.forward returns a plain Tensor.
+        # Wrap each of DiffuLLaMA's decoder layers individually so layer_outputs[0]
+        # gives full 3D hidden_states without stripping the batch dimension.
+        def _make_tuple_fwd(orig_fwd):
+            def _wrapped(self, *args, **kwargs):
+                out = orig_fwd(self, *args, **kwargs)
+                return out if isinstance(out, (tuple, list)) else (out,)
+            return _wrapped
+        _tuple_dec_fwd = _make_tuple_fwd(_orig_decoder_fwd)
+        for _layer in diffullama.denoise_model.layers:
+            _layer.forward = _types.MethodType(_tuple_dec_fwd, _layer)
+        # Store in args for access inside get_next_n_tokens_diffullama
+        args.diffullama_tokenizer = diffullama_tokenizer
+        # logits_temp=1.0 / topp_temp=1.0: no temperature scaling → deterministic greedy drafts
+        args.diffullama_args = Namespace(
+            shift=True,
+            diffusion_steps=None,  # set per-call from drafter_threshold in the main loop
+            logits_temp=1.0,
+            topp_temp=1.0,
+        )
+        logging.info(
+            f"DiffuLLaMA loaded. diffusion_steps sweep={args.diffullama_diffusion_steps}, "
+            f"mask_token_id={diffullama_tokenizer.mask_token_id}"
+        )
     if args.run_ar:
         draft_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
         draft_model = AutoModelForCausalLM.from_pretrained(
@@ -732,7 +935,19 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                         small_block_size=args.small_block_size,
                         threshold=drafter_threshold,
                     )
-                        
+                elif draft_type == "diffullama":
+                    if freq_scheme != "sf":
+                        raise NotImplementedError("DiffuLLaMA currently supports static-frequency drafting only.")
+                    spec_len = args.spec_len
+                    draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_diffullama(
+                        diffullama,
+                        args,
+                        orig_model_inputs,
+                        current_token_ids,
+                        spec_len=spec_len,
+                        diffusion_steps=drafter_threshold,
+                    )
+
                 total_num_forward_passes += num_forward_passes
                 # print(f"forward_pass_latencies {forward_pass_latencies}")  # NOTE(ruipan): TPT of 1.5B dLLM is similar to 1.5B AR model
                 

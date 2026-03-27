@@ -57,6 +57,10 @@ def format_drafter_name(args, drafter_config):
         if freq_scheme == "sf":
             return f"dllm_v1_{drafter_threshold}_sf_{args.spec_len}"
         raise ValueError(f"Unknown freq_scheme for Fast-dLLM-v1 drafter: {freq_scheme}")
+    elif draft_type == "diffullama":
+        if freq_scheme == "sf":
+            return f"diffullama_{drafter_threshold}_sf_{args.spec_len}"
+        raise ValueError(f"Unknown freq_scheme for DiffuLLaMA drafter: {freq_scheme}")
     else:
         raise ValueError(f"Unknown draft_type: {draft_type}")
 
