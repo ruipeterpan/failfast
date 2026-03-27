@@ -54,6 +54,8 @@ def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n, temperat
         max_new_tokens=n,
         do_sample=True,  # use greedy decoding
         temperature=temperature,
+        top_p=1.0,
+        top_k=0.0,
         output_scores=True,
         return_dict_in_generate=True,
     )
@@ -65,7 +67,8 @@ def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n, temperat
     draft_probs =[]
     for logits in generate_output.scores:
         # Scale by temperature and apply softmax
-        probs = torch.softmax(logits[0] / temperature, dim=-1)
+        # probs = torch.softmax(logits[0] / temperature, dim=-1)
+        probs = torch.softmax(logits[0], dim=-1)  # hf already applied temperature scaling to these logits
         draft_probs.append(probs)
     
     
@@ -146,7 +149,8 @@ def get_next_tokens_ar(
             found_lowconf = False
             for i, (token_id, score_logits) in enumerate(zip(generated_ids, scores)):
                 probs = torch.softmax(score_logits, dim=-1)
-                conf = probs[0, token_id].item()
+                # conf = probs[0, token_id].item()
+                conf = probs[0].max().item()
                 drafted.append(token_id)
                 confidences.append(conf)
                 
@@ -191,7 +195,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             block_size=args.block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
-            do_sample=False,
+            do_sample=True,  # FIXME!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             temperature=temperature,
             top_p=1.0,
             top_k=0.0,
@@ -210,7 +214,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             block_size=args.block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
-            do_sample=False,
+            do_sample=True,
             temperature=temperature,
             top_p=1.0,
             top_k=0.0,
@@ -265,7 +269,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             block_size=args.block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
-            do_sample=False,
+            do_sample=True,
             temperature=temperature,
             top_p=1.0,
             top_k=0.0,
@@ -287,7 +291,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             small_block_size=small_block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
-            do_sample=False,
+            do_sample=True,
             temperature=temperature,
             top_p=1.0,
             top_k=0.0,
@@ -398,16 +402,17 @@ args, _ = parser.parse_known_args()
 # args.overwrite = True
 # args.max_new_tokens = 1024
 # args.run_ar = True
+# args.num_questions = 30
 # args.output_dir = "/data2/ruipan/failfast_icml_rebuttal"
 # args.ar_dynamic = True
 # args.baseline_sweep = True
 # args.spec_len = 16
 # args.block_size = 32
 # args.small_block_size = 16
-args.run_dllm_sf = True
+# args.run_dllm_sf = True
 # args.read_pickle = True  # XXX: read trajectory from pickle as well in future debugging
-args.target_model_name = "Qwen/Qwen2.5-7B-Instruct"  # for easier debugging
-args.sweep_lowconf_threshold = [0.1, 0.2, 0.3, 0.4]
+# args.target_model_name = "Qwen/Qwen2.5-32B-Instruct"  # for easier debugging
+# args.sweep_lowconf_threshold = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
 # args.sweep_max_spec_len = [96]
 # args.sweep_incr_len = [16]
 ######custom fields for easier debugging######
@@ -466,7 +471,8 @@ if not args.read_pickle:
 
 # %%
 for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
-# for problem_id in [2]:
+# for problem_id in [2]:  # MATH
+# for problem_id in [0]:
     transformers.set_seed(42)  # reproducibility for each question-model-model config pair
     raw_data = format_problem_and_options(args, problem_id)
     messages = [
