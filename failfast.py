@@ -492,6 +492,8 @@ def _load_diffullama_modules(args):
         attn_module,
         orig_llama_model_fwd,
         orig_decoder_fwd,
+        model_module.get_anneal_attn_mask,
+        model_module.top_p_logits,
     )
     return _DIFFULLAMA_MODULES
 
@@ -550,6 +552,129 @@ def get_next_n_tokens_diffullama(diffullama, args, orig_model_inputs, token_ids_
     return draft_tokens, num_forward_passes, []
 
 
+def _diffullama_generate_with_scores(diffullama, diff_args, tokenizer, inputs):
+    """Mirror of generate_samples that also returns per-token log-prob scores.
+
+    Returns:
+        (x0: Tensor[1, seqlen], x0_scores: Tensor[1, seqlen])
+        Both are shift-adjusted identically to generate_samples when diff_args.shift=True.
+        Scores are log-softmax values (negative); exp(score) gives probability.
+    """
+    import torch.distributions as dists
+    get_anneal_attn_mask = _DIFFULLAMA_MODULES[5]
+    top_p_logits = _DIFFULLAMA_MODULES[6]
+
+    logits_temp = diff_args.logits_temp
+    topp_temp = diff_args.topp_temp
+
+    x = inputs["input_ids"].to(diffullama.device)
+    if "src_mask" not in inputs:
+        src_mask = torch.zeros_like(x, dtype=torch.bool)
+    else:
+        src_mask = inputs["src_mask"].bool().to(diffullama.device)
+
+    x_embed = diffullama.get_embeds(x)
+    seq_len = x.size(1)
+    batch_size = x.size(0)
+    attention_mask = get_anneal_attn_mask(seq_len, batch_size, dtype=x_embed.dtype, device=x.device, attn_mask_ratio=1.0)
+
+    maskable_mask = ~src_mask
+    xt = x.masked_fill(maskable_mask, tokenizer.mask_token_id)
+
+    logits = diffullama(xt, attention_mask=attention_mask)
+    filter_logits = top_p_logits(logits / logits_temp, p=topp_temp)
+    scores = torch.log_softmax(filter_logits, dim=-1)
+    x0 = dists.Categorical(logits=scores).sample()
+    x0_scores = torch.gather(scores, -1, x0.unsqueeze(-1)).squeeze(-1)
+
+    if diff_args.shift:
+        x0 = torch.cat([x[:, 0:1], x0[:, :-1]], dim=1)
+        x0_scores = torch.cat([x0_scores[:, 0:1], x0_scores[:, :-1]], dim=1)
+
+    x0 = xt.masked_scatter(maskable_mask, x0[maskable_mask])
+
+    for t in range(diff_args.diffusion_steps - 1, 0, -1):
+        with torch.no_grad():
+            p_to_x0 = 1 / (t + 1)
+            masked_to_x0 = maskable_mask & (torch.rand_like(x0, dtype=torch.float) < p_to_x0)
+            xt.masked_scatter_(masked_to_x0, x0[masked_to_x0])
+            maskable_mask = maskable_mask.masked_fill(masked_to_x0, False)
+
+            logits = diffullama(xt, attention_mask=attention_mask)
+            filter_logits = top_p_logits(logits / logits_temp, p=topp_temp)
+            scores = torch.log_softmax(filter_logits, dim=-1)
+            x0 = dists.Categorical(logits=scores).sample()
+            x0_scores = torch.gather(scores, -1, x0.unsqueeze(-1)).squeeze(-1)
+
+            if diff_args.shift:
+                x0 = torch.cat([x[:, 0:1], x0[:, :-1]], dim=1)
+                x0_scores = torch.cat([x0_scores[:, 0:1], x0_scores[:, :-1]], dim=1)
+
+            x0 = xt.masked_scatter(maskable_mask, x0[maskable_mask])
+
+    if diff_args.shift:
+        x0 = x0[:, 1:]
+        x0_scores = x0_scores[:, 1:]
+
+    return x0, x0_scores
+
+
+def get_next_tokens_diffullama_df(diffullama, args, orig_model_inputs, token_ids_so_far,
+                                   diffusion_steps, lowconf_threshold, max_spec_len, incr_len):
+    """Dynamic-frequency DiffuLLaMA drafting (FailFast-style).
+
+    Drafts in chunks of `incr_len` tokens using DiffuLLaMA.  After each chunk,
+    stops early if any token's probability (exp of log-prob at the final denoising
+    step) falls below `lowconf_threshold`.  Caps total draft at `max_spec_len`.
+
+    Returns:
+        (draft_tokens: list[int], actual_spec_len: int, num_forward_passes: int, forward_pass_latencies: list)
+    """
+    diff_args = Namespace(
+        shift=args.diffullama_args.shift,
+        diffusion_steps=diffusion_steps,
+        logits_temp=args.diffullama_args.logits_temp,
+        topp_temp=args.diffullama_args.topp_temp,
+    )
+    tokenizer = args.diffullama_tokenizer
+    target_vocab_size = args.target_tokenizer.vocab_size
+
+    draft_tokens = []
+    total_fwd_passes = 0
+    buf = io.StringIO()
+
+    while len(draft_tokens) < max_spec_len:
+        chunk_len = min(incr_len, max_spec_len - len(draft_tokens))
+        prefix_ids = orig_model_inputs["input_ids"][0].tolist() + token_ids_so_far + draft_tokens
+        x0_ids = prefix_ids + [0] * chunk_len
+        src_mask = [1] * len(prefix_ids) + [0] * chunk_len
+        inputs = {
+            "input_ids": torch.tensor([x0_ids], dtype=torch.long, device=diffullama.device),
+            "src_mask": torch.tensor([src_mask], dtype=torch.long, device=diffullama.device),
+        }
+
+        with torch.no_grad(), redirect_stdout(buf):
+            x0, x0_scores = _diffullama_generate_with_scores(diffullama, diff_args, tokenizer, inputs)
+
+        # With shift=True the output is one token shorter; generated tokens start at len(prefix_ids)-1
+        start = len(prefix_ids) - 1
+        chunk_tokens = x0[0][start : start + chunk_len].tolist()
+        chunk_scores = x0_scores[0][start : start + chunk_len].tolist()
+
+        for tok in chunk_tokens:
+            if tok >= target_vocab_size:
+                logging.warning(f"[diffullama_df] Out-of-range token {tok} (target vocab_size={target_vocab_size})")
+
+        draft_tokens.extend(chunk_tokens)
+        total_fwd_passes += diffusion_steps
+
+        # FailFast: stop if any token's probability falls below the threshold
+        if any(torch.exp(torch.tensor(s)).item() < lowconf_threshold for s in chunk_scores):
+            break
+
+    return draft_tokens, len(draft_tokens), total_fwd_passes, []
+
+
 def construct_drafter_configs(args):
     drafter_configs = []
     if args.run_ar:  # AR Drafter
@@ -568,12 +693,21 @@ def construct_drafter_configs(args):
     if args.run_diffullama_sf:  # DiffuLLaMA Drafter (diffusionfamily/diffullama)
         drafter_configs.extend([("diffullama", steps, "sf", None, None, None) for steps in args.diffullama_diffusion_steps])
     if not args.baseline_sweep:  # FailFast Drafter
-        drafter_configs.extend([("dllm", thr, "df", lowconf_threshold, max_spec_len, incr_len) 
-                                for thr in args.drafter_thresholds
-                                for lowconf_threshold in args.sweep_lowconf_threshold
-                                for max_spec_len in args.sweep_max_spec_len
-                                for incr_len in args.sweep_incr_len
-                                ])
+        if not args.diffullama_dynamic:
+            drafter_configs.extend([("dllm", thr, "df", lowconf_threshold, max_spec_len, incr_len)
+                                    for thr in args.drafter_thresholds
+                                    for lowconf_threshold in args.sweep_lowconf_threshold
+                                    for max_spec_len in args.sweep_max_spec_len
+                                    for incr_len in args.sweep_incr_len
+                                    ])
+        else:  # DiffuLLaMA FailFast
+            drafter_configs.extend([
+                ("diffullama", steps, "df", lowconf_threshold, max_spec_len, incr_len)
+                for steps in args.diffullama_diffusion_steps
+                for lowconf_threshold in args.sweep_lowconf_threshold
+                for max_spec_len in args.sweep_max_spec_len
+                for incr_len in args.sweep_incr_len
+            ])
     args.drafter_configs = drafter_configs
 
 
@@ -628,6 +762,7 @@ parser.add_argument('--diffullama_dir', type=str, default="/scratch/gpfs/RAVIAN/
                     help="Path to DiffuLLaMA repo root (expects model.py, attention_patch.py inside)")
 parser.add_argument('--diffullama_diffusion_steps', type=int, nargs="+", default=[64],
                     help="Diffusion denoising steps per draft call; multiple values run a sweep (e.g., --diffullama_diffusion_steps 10 32 64)")
+parser.add_argument('--diffullama_dynamic', action='store_true', help='Also run DiffuLLaMA drafter in dynamic mode (FailFast-style stop condition)')
 parser.add_argument('--baseline_sweep', action='store_true', help='Running a baseline sweep, don\'t run dynamic frequency')
 parser.add_argument('--overwrite', action='store_true', help='Overwrite existing output pickles and figures')
 parser.add_argument('--reuse_drafts', action='store_true', help='Reuses drafted tokens from previous rounds if possible -- see Appendix E.')
@@ -728,7 +863,7 @@ if not args.read_pickle:
     dllm_v1_tokenizer = target_tokenizer
     if need_diffullama:
         # Load DiffuLLaMA modules (applies attention patch as a side-effect)
-        DiscreteDiffusionModel, _, _diffullama_attn_module, _orig_llama_model_fwd, _orig_decoder_fwd = _load_diffullama_modules(args)
+        DiscreteDiffusionModel, _, _diffullama_attn_module, _orig_llama_model_fwd, _orig_decoder_fwd, *_ = _load_diffullama_modules(args)
         from transformers import AutoConfig, LlamaForCausalLM
         diffullama_model_name = "diffusionfamily/diffullama"
         diffullama_path = _resolve_local_snapshot_path(diffullama_model_name)
@@ -938,17 +1073,28 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                         threshold=drafter_threshold,
                     )
                 elif draft_type == "diffullama":
-                    if freq_scheme != "sf":
-                        raise NotImplementedError("DiffuLLaMA currently supports static-frequency drafting only.")
-                    spec_len = args.spec_len
-                    draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_diffullama(
-                        diffullama,
-                        args,
-                        orig_model_inputs,
-                        current_token_ids,
-                        spec_len=spec_len,
-                        diffusion_steps=drafter_threshold,
-                    )
+                    if freq_scheme == "sf":
+                        spec_len = args.spec_len
+                        draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_diffullama(
+                            diffullama,
+                            args,
+                            orig_model_inputs,
+                            current_token_ids,
+                            spec_len=spec_len,
+                            diffusion_steps=drafter_threshold,
+                        )
+                    else:  # df: dynamic frequency (FailFast)
+                        draft_proposal, actual_spec_len, num_forward_passes, forward_pass_latencies = get_next_tokens_diffullama_df(
+                            diffullama,
+                            args,
+                            orig_model_inputs,
+                            current_token_ids,
+                            diffusion_steps=drafter_threshold,
+                            lowconf_threshold=lowconf_threshold,
+                            max_spec_len=max_spec_len,
+                            incr_len=incr_len,
+                        )
+                        spec_len = actual_spec_len
 
                 total_num_forward_passes += num_forward_passes
                 # print(f"forward_pass_latencies {forward_pass_latencies}")  # NOTE(ruipan): TPT of 1.5B dLLM is similar to 1.5B AR model
