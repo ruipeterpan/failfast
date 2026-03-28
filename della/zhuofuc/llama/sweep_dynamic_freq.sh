@@ -60,6 +60,7 @@ for DATASET_NAME in "${DATASETS[@]}"; do
             --log_level INFO \
             --overwrite \
             --diffullama_dynamic > "$logfile" 2>&1
+    done
 done
 
         # --read_pickle \

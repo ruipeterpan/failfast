@@ -317,42 +317,6 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
     return generated_ids, actual_spec_len, num_forward_passes, forward_pass_latencies
 
 
-_FAST_DLLM_V1_MODULES = None
-
-
-def _load_fast_dllm_v1_modules(args):
-    """Lazily import Fast-dLLM v1 generate/modeling modules together."""
-    global _FAST_DLLM_V1_MODULES
-    if _FAST_DLLM_V1_MODULES is not None:
-        return _FAST_DLLM_V1_MODULES
-
-    llada_dir = os.path.join(args.dllm_v1_dir, "llada")
-    generate_py = os.path.join(llada_dir, "generate.py")
-    modeling_py = os.path.join(llada_dir, "model", "modeling_llada.py")
-    if not os.path.exists(generate_py):
-        raise FileNotFoundError(
-            f"Could not find Fast-dLLM-v1 generate.py at: {generate_py}. "
-            "Please set --dllm_v1_dir to the Fast-dLLM repo root."
-        )
-    if not os.path.exists(modeling_py):
-        raise FileNotFoundError(
-            f"Could not find Fast-dLLM-v1 modeling file at: {modeling_py}. "
-            "Please set --dllm_v1_dir to the Fast-dLLM repo root."
-        )
-
-    if llada_dir not in sys.path:
-        sys.path.insert(0, llada_dir)
-
-    generate_spec = importlib.util.spec_from_file_location("fast_dllm_v1_generate", generate_py)
-    generate_module = importlib.util.module_from_spec(generate_spec)
-    generate_spec.loader.exec_module(generate_module)
-
-    modeling_module = importlib.import_module("model.modeling_llada")
-
-    _FAST_DLLM_V1_MODULES = (generate_module, modeling_module.LLaDAModelLM)
-    return _FAST_DLLM_V1_MODULES
-
-
 def _resolve_local_snapshot_path(model_name_or_path):
     """Resolve Hub model id to local cache path when available."""
     if os.path.exists(model_name_or_path):
@@ -361,65 +325,6 @@ def _resolve_local_snapshot_path(model_name_or_path):
         return snapshot_download(repo_id=model_name_or_path, local_files_only=True)
     except Exception:
         return model_name_or_path
-
-
-def _sanitize_tokens_for_dllm_v1(token_ids, vocab_size, pad_token_id=126081):
-    """Replace out-of-range token ids with pad token id for LLaDA v1."""
-    if vocab_size is None:
-        return token_ids, 0
-    if vocab_size <= 0:
-        return token_ids, 0
-
-    safe_pad_id = pad_token_id if 0 <= pad_token_id < vocab_size else (vocab_size - 1)
-    invalid_mask = (token_ids < 0) | (token_ids >= vocab_size)
-    num_invalid = int(invalid_mask.sum().item())
-    if num_invalid == 0:
-        return token_ids, 0
-
-    token_ids = token_ids.clone()
-    token_ids[invalid_mask] = safe_pad_id
-    return token_ids, num_invalid
-
-
-def get_next_n_tokens_dllm_v1(dllm_v1, args, orig_model_inputs, token_ids_so_far, spec_len, small_block_size, threshold):
-    """Get next n speculative tokens from Fast-dLLM-v1 (LLaDA backend)."""
-    generator_mod, _ = _load_fast_dllm_v1_modules(args)
-    if args.dllm_v1_generate_mode == "generate":
-        generator_fn = generator_mod.generate
-    elif args.dllm_v1_generate_mode == "prefix_cache":
-        generator_fn = generator_mod.generate_with_prefix_cache
-    elif args.dllm_v1_generate_mode == "dual_cache":
-        generator_fn = generator_mod.generate_with_dual_cache
-    else:
-        raise ValueError(f"Unknown --dllm_v1_generate_mode: {args.dllm_v1_generate_mode}")
-
-    device = dllm_v1.device
-    new_tokens = torch.tensor(token_ids_so_far, device=device, dtype=torch.long).unsqueeze(0)
-    prompt = torch.cat([orig_model_inputs["input_ids"].to(device), new_tokens], dim=1)
-    prompt, num_sanitized = _sanitize_tokens_for_dllm_v1(
-        prompt,
-        getattr(dllm_v1.config, "vocab_size", None),
-        pad_token_id=126081,
-    )
-    if num_sanitized > 0:
-        logging.warning(
-            f"[dllm_v1] Replaced {num_sanitized} out-of-range token ids with pad token id 126081."
-        )
-    prompt_len = prompt.shape[1]
-
-    generated_ids, num_forward_passes = generator_fn(
-        dllm_v1,
-        prompt,
-        gen_length=args.block_size, # total number of tokens to generate this call (the drafted length budget).
-        block_length=small_block_size, # size of each semi-AR block.
-        temperature=0.0,
-        remasking="low_confidence",
-        threshold=threshold,
-    )
-
-    generated_ids = generated_ids[0][prompt_len:prompt_len + spec_len].tolist()
-    forward_pass_latencies = []
-    return generated_ids, num_forward_passes, forward_pass_latencies
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +408,7 @@ def get_next_n_tokens_diffullama(diffullama, args, orig_model_inputs, token_ids_
 
     DiffuLLaMA is a discrete diffusion LM that fills all masked positions
     simultaneously via iterative denoising.  The calling convention mirrors
-    ``get_next_n_tokens_dllm_v1``:
+    ``get_next_n_tokens_dllm``:
 
     Returns:
         (draft_tokens: list[int], num_forward_passes: int, forward_pass_latencies: list)
@@ -688,8 +593,6 @@ def construct_drafter_configs(args):
             ])
     if args.run_dllm_sf:  # Fast-dLLM Drafter
         drafter_configs.extend([("dllm", thr, "sf", None, None, None) for thr in args.drafter_thresholds])
-    if args.run_dllm_v1_sf:  # Fast-dLLM-v1 Drafter (LLaDA backend)
-        drafter_configs.extend([("dllm_v1", thr, "sf", None, None, None) for thr in args.drafter_thresholds])
     if args.run_diffullama_sf:  # DiffuLLaMA Drafter (diffusionfamily/diffullama)
         drafter_configs.extend([("diffullama", steps, "sf", None, None, None) for steps in args.diffullama_diffusion_steps])
     if not args.baseline_sweep:  # FailFast Drafter
@@ -721,10 +624,6 @@ parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-32B-I
                     help="Name of the base model to use")
 parser.add_argument("--dllm_dir", type=str, default="/data2/ruipan/Fast_dLLM_v2_1.5B", 
                     help="Dir to the dLLM weights and (modified) modeling.py")
-parser.add_argument("--dllm_v1_dir", type=str, default="/scratch/gpfs/RAVIAN/zhuofuc/Fast-dLLM",
-                    help="Path to Fast-dLLM repo root (expects llada/generate.py inside)")
-parser.add_argument("--dllm_v1_generate_mode", type=str, default="generate", choices=["generate", "prefix_cache", "dual_cache"],
-                    help="Fast-dLLM-v1 generation backend")
 parser.add_argument("--num_questions", type=int, default=1,
                     help="Number of questions to run profiling on")
 parser.add_argument("--max_new_tokens", type=int, default=1024,
@@ -756,7 +655,6 @@ parser.add_argument('--run_ar', action='store_true', help='Run the AR drafter to
 parser.add_argument('--ar_model', type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help='HF model id for the AR drafter')
 parser.add_argument('--ar_dynamic', action='store_true', help='Also run the AR drafter in dynamic mode (FailFast-style stop condition)')
 parser.add_argument('--run_dllm_sf', action='store_true', help='Run the dLLM drafter with static frequency (in param sweep for baselines)')
-parser.add_argument('--run_dllm_v1_sf', action='store_true', help='Run Fast-dLLM-v1 (LLaDA) drafter with static frequency')
 parser.add_argument('--run_diffullama_sf', action='store_true', help='Run DiffuLLaMA (diffusionfamily/diffullama) drafter with static frequency')
 parser.add_argument('--diffullama_dir', type=str, default="/scratch/gpfs/RAVIAN/zhuofuc/DiffuLLaMA",
                     help="Path to DiffuLLaMA repo root (expects model.py, attention_patch.py inside)")
@@ -831,11 +729,9 @@ if not args.read_pickle:
         device_map="auto"
     )
     dllm = None
-    dllm_v1 = None
     diffullama = None
 
     need_dllm = any(x[0] == "dllm" for x in args.drafter_configs)
-    need_dllm_v1 = any(x[0] == "dllm_v1" for x in args.drafter_configs)
     need_diffullama = any(x[0] == "diffullama" for x in args.drafter_configs)
 
     if need_dllm:
@@ -846,21 +742,9 @@ if not args.read_pickle:
             device_map="auto",
             trust_remote_code=True
         )
-    if need_dllm_v1:
-        _, LLaDAModelLM = _load_fast_dllm_v1_modules(args)
-        dllm_v1_name = "GSAI-ML/LLaDA-8B-Instruct"
-        dllm_v1_path = _resolve_local_snapshot_path(dllm_v1_name)
-        dllm_v1_device = "cuda" if torch.cuda.is_available() else "cpu"
-        dllm_v1 = LLaDAModelLM.from_pretrained(
-            dllm_v1_path,
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
-        ).to(dllm_v1_device).eval()
     # NOTE(ruipan): drafter and target should probably share the same tokenizer?
     # dllm_tokenizer = AutoTokenizer.from_pretrained(dllm_name, trust_remote_code=True)
     dllm_tokenizer = target_tokenizer
-    # dllm_v1_tokenizer = AutoTokenizer.from_pretrained(dllm_v1_path, trust_remote_code=True)
-    dllm_v1_tokenizer = target_tokenizer
     if need_diffullama:
         # Load DiffuLLaMA modules (applies attention patch as a side-effect)
         DiscreteDiffusionModel, _, _diffullama_attn_module, _orig_llama_model_fwd, _orig_decoder_fwd, *_ = _load_diffullama_modules(args)
@@ -1059,19 +943,6 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                                                                     )
                         prev_prefill_output = prefill_output
                         spec_len = actual_spec_len  # update spec_len to the actual number of tokens proposed
-                elif draft_type == "dllm_v1":
-                    if freq_scheme != "sf":
-                        raise NotImplementedError("Fast-dLLM-v1 currently supports static-frequency drafting only.")
-                    spec_len = args.spec_len
-                    draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm_v1(
-                        dllm_v1,
-                        args,
-                        orig_model_inputs,
-                        current_token_ids,
-                        spec_len=spec_len,
-                        small_block_size=args.small_block_size,
-                        threshold=drafter_threshold,
-                    )
                 elif draft_type == "diffullama":
                     if freq_scheme == "sf":
                         spec_len = args.spec_len
