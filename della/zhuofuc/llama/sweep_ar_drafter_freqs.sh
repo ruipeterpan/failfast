@@ -1,16 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=sweep_dllm_0.9             # Job name
-#SBATCH --output="./slurm_logs/sweep_dllm_0.9_%A.out"       # Standard output log
-#SBATCH --error="./slurm_logs/sweep_dllm_0.9_%A.err"         # Standard error log
+#SBATCH --job-name=sweep_ar              # Job name
+#SBATCH --output="./slurm_logs/sweep_ar_%A.out"       # Standard output log
+#SBATCH --error="./slurm_logs/sweep_ar_%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
-#SBATCH --gres=gpu:2                        # Number of GPUs to allocate
-##SBATCH --constraint="gpu80"
-#SBATCH --time=6:00:00                        # Time limit (24 hours max)
-#SBATCH --mem=20G                            # Memory allocation (adjust as needed)
-#SBATCH --partition=ailab​
-##SBATCH --partition=pli-lc
-##SBATCH --account=ravi-group
+#SBATCH --gres=gpu:4                        # Number of GPUs to allocate
+#SBATCH --constraint="gpu80"
+#SBATCH --time=2:00:00                        # Time limit (24 hours max)
+#SBATCH --mem-per-cpu=8G                            # Memory allocation (adjust as needed)
 
 source ~/.bashrc
 
@@ -21,7 +18,6 @@ vllm_dllm
 EOF
 
 # initialization: set environment variables
-DLLM_V1_DIR="/scratch/gpfs/RAVIAN/zhuofuc/Fast-dLLM"
 nvidia-smi
 
 cd $SCRATCH/diffspec_private
@@ -30,38 +26,34 @@ OUTPUT_DIR="./outputs"
 
 TARGET_MODEL="meta-llama/Llama-2-70b-chat-hf"
 DATASETS=("math")  #  "aime"
-NUM_QUESTIONS=2
-DIFFUSION_STEPS=(1 16 64)
-VERI_FREQS=(6)
-# VERI_FREQS=(3 6 9 12 15 18)
-# VERI_FREQS=(3 4 5 6 7 8 9 10 11 12 13 14 15 16)  # 0.9
-# VERI_FREQS=(5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)  # 0.05
+NUM_QUESTIONS=5
+DRAFTER_THRESHOLDS=(0.05)
+VERI_FREQS=(3 6 9 12 15)
 
 for DATASET_NAME in "${DATASETS[@]}"; do
     timestamp=$(date +"%Y_%m_%d_%H_%M")  # equivalent of datetime.now().strftime("%Y_%m_%d_%H_%M") in python
     echo "Dataset ${DATASET_NAME} timestamp: ${timestamp}"
-    logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}_dllm_v1.ansi"
+    logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}_ar.ansi"
 
     while [ -f "$logfile" ]; do
         echo "Log file ${logfile} exists. Sleeping 60 seconds and retaking timestamp..."
         sleep 60
         timestamp=$(date +"%Y_%m_%d_%H_%M")
-        logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}_dllm_v1.ansi"
+        logfile="${OUTPUT_DIR}/logs/${timestamp}_${DATASET_NAME}_ar.ansi"
     done
 
     for FREQ in "${VERI_FREQS[@]}"; do
-        echo "Running FREQ: ${FREQ}"
         python failfast.py \
             --dataset_name "${DATASET_NAME}" \
             --output_dir "${OUTPUT_DIR}" \
             --target_model_name "${TARGET_MODEL}" \
-            --dllm_v1_dir "${DLLM_V1_DIR}" \
             --num_questions "${NUM_QUESTIONS}" \
             --spec_len "${FREQ}" \
             --max_new_tokens 1024 \
-            --diffullama_diffusion_steps "${DIFFUSION_STEPS[@]}" \
+            --drafter_thresholds "${DRAFTER_THRESHOLDS[@]}" \
             --log_level INFO \
-            --run_diffullama_sf \
+            --run_ar \
+            --ar_model "meta-llama/Llama-2-7b-chat-hf" \
             --baseline_sweep \
             --overwrite \
             >> "$logfile" 2>&1

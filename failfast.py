@@ -619,6 +619,7 @@ parser.add_argument("--sweep_incr_len", type=int, nargs="+",
                     default=[10],
                     help="N in FailFast Alg. 1")
 parser.add_argument('--run_ar', action='store_true', help='Run the AR drafter to compare speedups')
+parser.add_argument('--ar_model', type=str, default="Qwen/Qwen2.5-1.5B-Instruct", help='HF model id for the AR drafter')
 parser.add_argument('--ar_dynamic', action='store_true', help='Also run the AR drafter in dynamic mode (FailFast-style stop condition)')
 parser.add_argument('--run_dllm_sf', action='store_true', help='Run the dLLM drafter with static frequency (in param sweep for baselines)')
 parser.add_argument('--run_dllm_v1_sf', action='store_true', help='Run Fast-dLLM-v1 (LLaDA) drafter with static frequency')
@@ -787,9 +788,10 @@ if not args.read_pickle:
             f"mask_token_id={diffullama_tokenizer.mask_token_id}"
         )
     if args.run_ar:
-        draft_model_name = "Qwen/Qwen2.5-1.5B-Instruct"
+        draft_model_name = args.ar_model
+        draft_model_path = _resolve_local_snapshot_path(draft_model_name)
         draft_model = AutoModelForCausalLM.from_pretrained(
-            draft_model_name,
+            draft_model_path,
             torch_dtype="auto",
             device_map="auto"
         )
