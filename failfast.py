@@ -33,31 +33,6 @@ from utils import (
     print_sd_trajectory,
 )
 
-# %%
-def get_target_token_ids(model, tokenizer, messages, max_new_tokens):
-    """Get the target series of token IDs for the given messages.
-    """
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True
-    )
-    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-    num_input_tokens = model_inputs.input_ids.shape[1]
-    logging.debug(f"num_input_tokens {num_input_tokens}, first eight tokens: {model_inputs.input_ids[0, :8].tolist()}")
-    
-    generated_ids = model.generate(
-        **model_inputs,
-        max_new_tokens=max_new_tokens,
-        do_sample=False,  # use greedy decoding, not sampling; overrides all below sampling params
-        # temperature=0.0, top_p=1.0, top_k=0.0,
-    )
-    generated_ids = [
-        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
-    
-    return generated_ids[0].tolist(), model_inputs
-
 
 def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n):
     """Get the next n tokens from the model given the token IDs so far.
@@ -824,11 +799,21 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
     messages = [
         {"role": "user", "content": get_first_user_msg(args, raw_data)},
     ]
-    text = args.target_tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True
-    )
+    if args.target_tokenizer.chat_template is not None:
+        text = args.target_tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+    else:
+        # handle non-chat models
+        text = ""
+        for m in messages:
+            if m["role"] == "user":
+                text += f"User: {m['content']}\n"
+            elif m["role"] == "assistant":
+                text += f"Assistant: {m['content']}\n"
+        text += "Assistant:"
     if not args.read_pickle:
         orig_model_inputs = target_tokenizer([text], return_tensors="pt").to(target_model.device)
         num_target_tokens = args.max_new_tokens  # drafters will generate this many tokens
