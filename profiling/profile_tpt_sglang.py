@@ -25,7 +25,9 @@ SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 python -m sglang.launch_server  --mo
 parser = argparse.ArgumentParser(description="Profiles the vLLM TPT of a model on all datasets.")
 parser.add_argument("--port", type=int, default=30000, help="Port to use for the vLLM server")
 parser.add_argument("--output_file", type=str, help="Name of the output file")
-parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-32B-Instruct", 
+parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-7B-Instruct", 
+# parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-14B-Instruct", 
+# parser.add_argument("--target_model_name", type=str, default="Qwen/Qwen2.5-32B-Instruct", 
                     help="Name of the base model to use")
 parser.add_argument("--num_questions", type=int, default=1,
                     help="Number of questions to run profiling on")
@@ -65,7 +67,7 @@ for dataset_name in ["math", "aime", "gsm8k", "gpqa", "humaneval"]:
     args.dataset_name = dataset_name
     dataset = populate_dataset(args)
 
-    # %%
+
     total_time = 0
     total_output_tokens = 0
 

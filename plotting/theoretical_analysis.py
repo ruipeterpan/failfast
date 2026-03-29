@@ -88,8 +88,8 @@ for draft_len in draft_len_list:
 
 fig, ax = plt.subplots(figsize=(4.5, 2.5))
 # fig, ax = plt.subplots(figsize=(9, 5))
-ax.plot(draft_len_list, ar_speedup_list, color='#74C69D', marker='D', markersize=3.5, label='AR Drafter')
 ax.plot(draft_len_list, dllm_speedup_list, color='#2D6A4F', marker='o', markersize=3.5, label='dLLM Drafter')
+ax.plot(draft_len_list, ar_speedup_list, color='#74C69D', marker='D', markersize=3.5, label='AR Drafter')
 ax.legend(fontsize=12, markerscale=1.75)
 ax.set_xticks([0, 10, 20, 30, 40, 50])
 ax.set_yticks([1, 2, 3, 4, 5])
@@ -102,5 +102,5 @@ ax.yaxis.set_label_coords(-0.08, 0.4)  # x, y
 ax.grid(True, linestyle='--', alpha=0.7)
 fig.tight_layout()
 plt.show()
-# fig.savefig(f"../figures/theoretical_analysis.pdf", dpi=500, bbox_inches='tight')
+fig.savefig(f"../figures/theoretical_analysis.pdf", dpi=500, bbox_inches='tight')
 # %%
