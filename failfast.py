@@ -34,30 +34,6 @@ from utils import (
 )
 
 # %%
-def get_target_token_ids(model, tokenizer, messages, max_new_tokens):
-    """Get the target series of token IDs for the given messages.
-    """
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True
-    )
-    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-    num_input_tokens = model_inputs.input_ids.shape[1]
-    logging.debug(f"num_input_tokens {num_input_tokens}, first eight tokens: {model_inputs.input_ids[0, :8].tolist()}")
-    
-    generated_ids = model.generate(
-        **model_inputs,
-        max_new_tokens=max_new_tokens,
-        do_sample=False,  # use greedy decoding, not sampling; overrides all below sampling params
-        # temperature=0.0, top_p=1.0, top_k=0.0,
-    )
-    generated_ids = [
-        output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
-    
-    return generated_ids[0].tolist(), model_inputs
-
 
 def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n):
     """Get the next n tokens from the model given the token IDs so far.
@@ -703,14 +679,16 @@ populate_dataset(args)  # populates args.dataset
 
 args.latency = {  # all in ms
     "vLLM_A6000": {
-        "draft_fwd_pass": 6.1,
+        # "draft_fwd_pass": 6.1,  # 1.5B
+        "draft_fwd_pass": 13.73,  # 7B
         "target_tpt": {
             "Qwen2.5-7B-Instruct": 13.5,
             "Qwen2.5-14B-Instruct": 24.7,
             "Qwen2.5-32B-Instruct": 52.6,
             # TODO: get the actual TPT for following models
             "Meta-Llama-3-70B-Instruct": 1000,
-            "Llama-2-13b-chat-hf": 1000,
+            "Llama-2-7b-hf": 13.73,
+            "Llama-2-13b-hf": 25.83,
             "Llama-2-70b-chat-hf": 1000,
         },
     },
@@ -824,11 +802,21 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
     messages = [
         {"role": "user", "content": get_first_user_msg(args, raw_data)},
     ]
-    text = args.target_tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True
-    )
+    if not args.target_model_name == "meta-llama/Llama-2-13b-hf":
+        text = args.target_tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+    else:
+        text = ""
+        for m in messages:
+            if m["role"] == "user":
+                text += f"User: {m['content']}\n"
+            elif m["role"] == "assistant":
+                text += f"Assistant: {m['content']}\n"
+
+        text += "Assistant:"
     if not args.read_pickle:
         orig_model_inputs = target_tokenizer([text], return_tensors="pt").to(target_model.device)
         num_target_tokens = args.max_new_tokens  # drafters will generate this many tokens
@@ -1097,7 +1085,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
         else:
             visualize_acc_rate_over_time(stats_each_round, spec_len=args.spec_len, acceptance_rate=acceptance_rate, output_dir=None, filename=None)
         
-        print_sd_trajectory(pickled_data, target_tokenizer)
+        # print_sd_trajectory(pickled_data, target_tokenizer)
         
         pickled_data["num_speculation_rounds"] = num_speculation_rounds
         pickled_data["total_num_forward_passes"] = total_num_forward_passes
