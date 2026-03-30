@@ -33,7 +33,10 @@ from utils import (
     print_sd_trajectory,
 )
 
+<<<<<<< HEAD
 # %%
+=======
+>>>>>>> de3099128b08493f7e82992796d71d38286dca9d
 
 def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n):
     """Get the next n tokens from the model given the token IDs so far.
@@ -802,20 +805,20 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
     messages = [
         {"role": "user", "content": get_first_user_msg(args, raw_data)},
     ]
-    if not args.target_model_name == "meta-llama/Llama-2-13b-hf":
+    if args.target_tokenizer.chat_template is not None:
         text = args.target_tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True
         )
     else:
+        # handle non-chat models
         text = ""
         for m in messages:
             if m["role"] == "user":
                 text += f"User: {m['content']}\n"
             elif m["role"] == "assistant":
                 text += f"Assistant: {m['content']}\n"
-
         text += "Assistant:"
     if not args.read_pickle:
         orig_model_inputs = target_tokenizer([text], return_tensors="pt").to(target_model.device)
