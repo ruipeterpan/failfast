@@ -5,9 +5,10 @@
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
 #SBATCH --gres=gpu:4                        # Number of GPUs to allocate
-#SBATCH --constraint="gpu80"
+##SBATCH --constraint="gpu80"
 #SBATCH --time=2:00:00                        # Time limit (24 hours max)
 #SBATCH --mem-per-cpu=8G                            # Memory allocation (adjust as needed)
+#SBATCH --partition=ailab​
 
 source ~/.bashrc
 
@@ -24,7 +25,7 @@ cd $SCRATCH/diffspec_private
 
 OUTPUT_DIR="./outputs"
 
-TARGET_MODEL="meta-llama/Llama-2-70b-chat-hf"
+TARGET_MODEL="meta-llama/Llama-2-70b-hf"
 DATASETS=("math")  #  "aime"
 NUM_QUESTIONS=5
 DIFFUSION_STEPS=(1 2 4)
