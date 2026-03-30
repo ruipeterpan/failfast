@@ -33,10 +33,7 @@ from utils import (
     print_sd_trajectory,
 )
 
-<<<<<<< HEAD
 # %%
-=======
->>>>>>> de3099128b08493f7e82992796d71d38286dca9d
 
 def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n):
     """Get the next n tokens from the model given the token IDs so far.
