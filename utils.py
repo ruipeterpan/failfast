@@ -160,16 +160,8 @@ def populate_dataset(args):
         dataset = load_dataset("openai/gsm8k", "main")["test"]
     elif args.dataset_name == "humaneval":
         dataset = load_dataset("openai/openai_humaneval")["test"]
-    elif args.dataset_name == "alpaca":
-        dataset = load_dataset("tatsu-lab/alpaca")["train"]
-    elif args.dataset_name == "lmsys":
-        dataset = load_dataset("lmsys/lmsys-chat-1m")["train"]
-    elif args.dataset_name == "sharegpt":
-        dataset = load_dataset("RyokoAI/ShareGPT52K")["train"]
-    elif args.dataset_name == "ultrachat":
-        dataset = load_dataset("HuggingFaceH4/ultrachat_200k")["train_sft"]
-    elif args.dataset_name == "llama_nemotron":
-        dataset = load_dataset("nvidia/Llama-Nemotron-Post-Training-Dataset")["chat"]
+    elif args.dataset_name == "mt_bench":
+        dataset = load_dataset("philschmid/mt-bench")["train"]
     else:
         raise NotImplementedError
     args.dataset = dataset
@@ -201,21 +193,13 @@ def format_problem_and_options(args, problem_id):
     elif args.dataset_name == "humaneval":
         data = args.dataset[problem_id]
         return {"problem": data["prompt"]}
-    elif args.dataset_name == "alpaca":
-        return {"problem": args.dataset["instruction"][problem_id]}
-    elif args.dataset_name == "lmsys":
-        return {"problem": args.dataset["conversation"][problem_id][0]["content"]}
-    elif args.dataset_name == "sharegpt":
-        return {"problem": args.dataset["conversations"][problem_id][0]["value"]}
-    elif args.dataset_name == "ultrachat":
-        return {"problem": args.dataset["prompt"][problem_id]}
-    elif args.dataset_name == "llama_nemotron":
-        return {"problem": args.dataset["input"][problem_id][0]["content"]}
+    elif args.dataset_name == "mt_bench":
+        return {"problem": args.dataset["turns"][problem_id + 60][0]}
     else:
         raise NotImplementedError
 
 def get_first_user_msg(args, raw_data):
-    if args.dataset_name in ["aime", "math"]:
+    if args.dataset_name in ["aime", "math", "gsm8k"]:
         system_prompt = """
         Solve the following math problem efficiently and clearly. Please reason step by step, 
         separate logical reasoning steps with two newline characters (\n\n), and put your final answer within \\boxed{{}}.
@@ -257,14 +241,6 @@ def get_first_user_msg(args, raw_data):
             problem=raw_data["problem"],
             options=raw_data["options"],
         )
-    elif args.dataset_name == "gsm8k":
-        system_prompt = """
-        Think step by step and then please provide an efficient and self-contained Python script that solves the following problem in a markdown code block:
-        ```
-        {problem}
-        ```
-        """
-        return system_prompt.format(problem=raw_data["problem"])
     elif args.dataset_name == "humaneval":
         system_prompt = """
         Think step by step and then please provide an efficient and self-contained Python script that solves the following problem in a markdown code block:
@@ -273,14 +249,18 @@ def get_first_user_msg(args, raw_data):
         ```
         """
         return system_prompt.format(problem=raw_data["problem"])
-    elif args.dataset_name in ["alpaca", "lmsys", "sharegpt", "ultrachat", "llama_nemotron"]:
-        # Think step by step and then please answer the following question:
+    elif args.dataset_name in ["mt_bench"]:
         system_prompt = """
-        Please answer the following question:
-        ```
-        {problem}
-        ```
+        Solve the following problem efficiently and clearly. Please reason step by step, 
+        separate logical reasoning steps with two newline characters (\n\n), and put your final answer within \\boxed{{}}.
+        Problem: {problem}
         """
+        # system_prompt = """
+        # Think step by step and then please provide an efficient and self-contained Python script that solves the following problem in a markdown code block:
+        # ```
+        # {problem}
+        # ```
+        # """
         return system_prompt.format(problem=raw_data["problem"])
     else:
         raise NotImplementedError

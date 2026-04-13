@@ -27,6 +27,7 @@ elif [ "$CLUSTER" = "della" ]; then
     DATA_DIR="/scratch/gpfs/RAVIAN/rp2773/data"
     DLLM_DIR="/home/rp2773/data/Fast_dLLM_v2_1.5B"
     export HF_HOME="/scratch/gpfs/RAVIAN/rp2773/hf_cache"
+    export HF_DATASETS_CACHE="/scratch/gpfs/RAVIAN/rp2773/hf_cache/datasets"
     export HF_HUB_OFFLINE=1
     export HF_DATASETS_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
@@ -40,13 +41,14 @@ conda activate vllm_dllm
 
 OUTPUT_DIR="${DATA_DIR}/diffspec"
 
-TARGET_MODEL="Qwen/Qwen2.5-32B-Instruct"
+# TARGET_MODEL="Qwen/Qwen2.5-32B-Instruct"
 # TARGET_MODEL="Qwen/Qwen2.5-14B-Instruct"
-DATASETS=("gpqa")  #  "aime"
-NUM_QUESTIONS=30
+TARGET_MODEL="Qwen/Qwen2.5-7B-Instruct"
+DATASETS=("mt_bench")  #  "aime"
+NUM_QUESTIONS=5
 DRAFTER_THRESHOLDS=(0.05)  # fail fast
-SWEEP_lowconf_threshold=(0.35 0.4 0.45)  # 0.2, 0.25, 0.3, 0.35, 0.4, 0.45
-SWEEP_max_spec_len=(35 40 45 50 55 60)  # win big!
+SWEEP_lowconf_threshold=(0.5)  # 0.2, 0.25, 0.3, 0.35, 0.4, 0.45
+SWEEP_max_spec_len=(60)  # win big!
 SWEEP_incr_len=(10)
 
 
@@ -76,6 +78,7 @@ for DATASET_NAME in "${DATASETS[@]}"; do
         --sweep_incr_len "${SWEEP_incr_len[@]}" \
         --log_level INFO \
         --overwrite \
+        --run_dllm_sf \
         --run_ar > "$logfile" 2>&1
 done
 
