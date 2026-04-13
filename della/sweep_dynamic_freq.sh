@@ -40,13 +40,13 @@ conda activate vllm_dllm
 
 OUTPUT_DIR="${DATA_DIR}/diffspec"
 
-# TARGET_MODEL="Qwen/Qwen2.5-32B-Instruct"
-TARGET_MODEL="Qwen/Qwen2.5-14B-Instruct"
+TARGET_MODEL="Qwen/Qwen2.5-32B-Instruct"
+# TARGET_MODEL="Qwen/Qwen2.5-14B-Instruct"
 DATASETS=("gpqa")  #  "aime"
 NUM_QUESTIONS=30
-DRAFTER_THRESHOLDS=(0.05)
+DRAFTER_THRESHOLDS=(0.05)  # fail fast
 SWEEP_lowconf_threshold=(0.35 0.4 0.45)  # 0.2, 0.25, 0.3, 0.35, 0.4, 0.45
-SWEEP_max_spec_len=(35 40 45 50 55 60)
+SWEEP_max_spec_len=(35 40 45 50 55 60)  # win big!
 SWEEP_incr_len=(10)
 
 

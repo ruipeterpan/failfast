@@ -1,54 +1,67 @@
+# %%
 import re
 import matplotlib.pyplot as plt
 
 def plot_training_accuracy(file_path):
-    accuracies = []
-    
-    # Regex pattern to find 'acc=' followed by a decimal number
-    # Matches "acc=0.80" and captures "0.80"
-    acc_pattern = re.compile(r"acc=([0-9.]+)")
+    # Dictionary to store {(epoch, step): accuracy}
+    # This automatically handles duplicates by keeping the last seen value
+    data_points = {}
 
-    print(f"Reading {file_path}...")
+    # Regex to capture: Epoch, Current Step, and Accuracy
+    # Matches: "Epoch 7", "31795/51967", and "acc=0.80"
+    pattern = re.compile(r"Epoch\s+(\d+):.*?\s+(\d+)/\d+.*acc=([0-9.]+)")
+
+    print(f"Processing {file_path} (this may take a moment for 800k lines)...")
     
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                # Search for the accuracy pattern in the current line
-                match = acc_pattern.search(line)
-                if match:
-                    # Convert the captured string to a float
-                    acc_value = float(match.group(1))
-                    accuracies.append(acc_value)
-    except FileNotFoundError:
-        print("Error: File not found.")
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            match = pattern.search(line)
+            if match:
+                epoch = int(match.group(1))
+                step = int(match.group(2))
+                acc = float(match.group(3))
+                
+                # The dictionary key is a tuple. 
+                # If (7, 31795) appears again, it overwrites the previous value.
+                data_points[(epoch, step)] = acc
+
+    if not data_points:
+        print("No data found.")
         return
 
-    if not accuracies:
-        print("No accuracy data found in the log file.")
-        return
-
-    print(f"Extracted {len(accuracies)} data points. Plotting...")
-
-    # Plotting the data
-    plt.figure(figsize=(12, 6))
-    plt.plot(accuracies, linewidth=0.5, color='blue', label='Accuracy per Step')
+    # Sort the data by epoch then by step to ensure a continuous line
+    sorted_keys = sorted(data_points.keys())
+    accuracies = [data_points[k] for k in sorted_keys]
     
-    # Optional: Calculate a moving average for 800k lines to see trends clearly
-    # if len(accuracies) > 1000:
-    #     import pandas as pd
-    #     smooth_acc = pd.Series(accuracies).rolling(window=100).mean()
-    #     plt.plot(smooth_acc, color='red', label='Moving Average (100 steps)')
+    print(f"Extracted {len(accuracies)} unique steps. Plotting...")
 
-    plt.title("Training Accuracy Over Time")
-    plt.xlabel("Training Steps")
-    plt.ylabel("Accuracy")
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.legend()
+    # Plotting
+    fig, ax = plt.subplots(figsize=(4.5, 2.4))
     
-    # Show the plot
+    # We use a simple range for X axis (Global Training Steps)
+    # ax.plot(range(len(accuracies)), accuracies, linewidth=0.5, alpha=0.8, label='Step Accuracy')
+
+    # Since 800k points is very noisy, let's add a moving average (Window of 500 steps)
+    if len(accuracies) > 1000:
+        import numpy as np
+        window = 250
+        moving_avg = np.convolve(accuracies, np.ones(window)/window, mode='valid')
+        ax.plot(range(window-1, len(accuracies)), moving_avg, color='#2D6A4F', linewidth=1.5)
+
+    # plt.title("Training Accuracy (Duplicates Removed)")
+    ax.set_xlabel("Num Training Steps", fontsize=12)
+    ax.set_ylabel("Accuracy", fontsize=12)
+    # plt.legend()
+    ax.grid(True, alpha=0.3)
+    
     plt.tight_layout()
     plt.show()
+    fig.savefig(f"../figures/eagle3_32b.pdf", dpi=500, bbox_inches='tight')
 
 if __name__ == "__main__":
     # Replace 'training_log.txt' with your actual filename
-    plot_training_accuracy('~/data/failfast_eagle/logs/2025_12_22_13_34.log')
+    # plot_training_accuracy('/data2/ruipan/diffspec/logs/eagle_training/7b.log')
+    # plot_training_accuracy('/data2/ruipan/diffspec/logs/eagle_training/14b.log')
+    plot_training_accuracy('/data2/ruipan/diffspec/logs/eagle_training/32b.log')
+
+# %%

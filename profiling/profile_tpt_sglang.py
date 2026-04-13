@@ -60,8 +60,8 @@ client = httpx.Client(
 )
 
 tpts = {}
-for dataset_name in ["math", "aime", "gpqa", "mmlu", "gsm8k", "humaneval"]:
-# for dataset_name in ["humaneval"]:
+for dataset_name in ["math", "aime", "gsm8k", "gpqa", "humaneval"]:
+# for dataset_name in ["gsm8k"]:
     args.dataset_name = dataset_name
     dataset = populate_dataset(args)
 

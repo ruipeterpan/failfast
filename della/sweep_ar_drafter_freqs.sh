@@ -44,7 +44,7 @@ OUTPUT_DIR="${DATA_DIR}/diffspec"
 TARGET_MODEL="Qwen/Qwen2.5-14B-Instruct"
 DATASETS=("gpqa")  #  "aime"
 NUM_QUESTIONS=30
-DRAFTER_THRESHOLDS=(0.05)
+DRAFTER_THRESHOLDS=(0.05)  # not useful for static freq drafter, but kept for compatibility
 VERI_FREQS=(3 4 5 6 7 8 9 10)
 
 for DATASET_NAME in "${DATASETS[@]}"; do

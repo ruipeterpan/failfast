@@ -10,16 +10,16 @@ import matplotlib.patches as mpatches # <--- Added for custom legend handle
 # Added "fast-dllm+" with placeholder data (slightly improved over fast-dllm).
 data = {
     "Qwen2.5-32B": {
-        "ar": [4466, 5712, 10178],         # [spec, ver, total]
-        "fast-dllm": [3423, 5571, 8995],
+        "ar": [4313, 5295, 9608],         # [spec, ver, total]
+        "fast-dllm": [3257, 5204, 8462],
         # "fast-dllm+": [4013, 4924, 8937], # <--- New Scheme
-        "failfast": [1899, 5119, 7019],
+        "failfast": [1778, 4793, 6571],
     },
     "Qwen2.5-14B": {
-        "ar": [3537, 3299, 6837],
-        "fast-dllm": [2855, 3259, 6115],
+        "ar": [3599, 3011, 6610],
+        "fast-dllm": [2826, 2997, 5823],
         # "fast-dllm+": [3250, 2770, 6020],  # <--- New Scheme
-        "failfast": [1872, 2417, 4289],
+        "failfast": [1785, 2261, 4046],
     }
 }
 

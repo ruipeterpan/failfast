@@ -44,7 +44,7 @@ OUTPUT_DIR="${DATA_DIR}/diffspec"
 TARGET_MODEL="Qwen/Qwen2.5-14B-Instruct"
 DATASETS=("gpqa")  #  "aime"
 NUM_QUESTIONS=30
-DRAFTER_THRESHOLDS=(0.9)
+DRAFTER_THRESHOLDS=(0.9)  # Fast-dLLM's default that balances speed and quality
 VERI_FREQS=(3 4 5 6 7 8 9 10 11 12 13 14 15 16)  # 0.9
 # VERI_FREQS=(5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)  # 0.05
 
