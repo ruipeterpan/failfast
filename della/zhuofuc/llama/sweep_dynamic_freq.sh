@@ -1,36 +1,52 @@
 #!/bin/bash
-#SBATCH --job-name=sweep_diffullama_ff              # Job name
-#SBATCH --output="./slurm_logs/sweep_diffullama_ff_%A.out"       # Standard output log
-#SBATCH --error="./slurm_logs/sweep_diffullama_ff_%A.err"         # Standard error log
+#SBATCH --job-name=llama_failfast              # Job name
+#SBATCH --output="/home/rp2773/slurm_logs/%A.out"       # Standard output log
+#SBATCH --error="/home/rp2773/slurm_logs/%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
-#SBATCH --gres=gpu:4                        # Number of GPUs to allocate
-##SBATCH --constraint="gpu80"
-#SBATCH --time=2:00:00                        # Time limit (24 hours max)
-#SBATCH --mem-per-cpu=8G                            # Memory allocation (adjust as needed)
-#SBATCH --partition=ailab​
+#SBATCH --gres=gpu:1                        # Number of GPUs to allocate
+#SBATCH --constraint="gpu80"
+#SBATCH --time=4:00:00                        # Time limit (24 hours max)
+#SBATCH --mem=20G                            # Memory allocation (adjust as needed)
+#SBATCH --mail-user=ruipan@princeton.edu  # Your email
+#SBATCH --mail-type=ALL  # Options: BEGIN, END, FAIL, REQUEUE, TIME_LIMIT, etc.
+#SBATCH --partition=pli
+#SBATCH --account=specreason
+##SBATCH --partition=pli-lc
+##SBATCH --account=ravi-group
 
-source ~/.bashrc
+# CLUSTER="ravi"
+CLUSTER="della"
 
-. ~/init.sh <<EOF
--1
-vllm_dllm
-1
-EOF
+# initialization: set environment variables based on the cluster
+if [ "$CLUSTER" = "ravi" ]; then
+    DATA_DIR="/home/ruipan/data2"
+    DLLM_DIR="/data2/ruipan/Fast_dLLM_v2_1.5B"
+    source /data2/ruipan/miniconda3/etc/profile.d/conda.sh
+elif [ "$CLUSTER" = "della" ]; then
+    DATA_DIR="/scratch/gpfs/RAVIAN/rp2773/data"
+    DLLM_DIR="/home/rp2773/data/Fast_dLLM_v2_1.5B"
+    export HF_HOME="/scratch/gpfs/RAVIAN/rp2773/hf_cache"
+    export HF_DATASETS_CACHE="/scratch/gpfs/RAVIAN/rp2773/hf_cache/datasets"
+    export HF_HUB_OFFLINE=1
+    export HF_DATASETS_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    source /scratch/gpfs/RAVIAN/rp2773/miniconda3/etc/profile.d/conda.sh
+    nvidia-smi
+else
+    echo "Error: CLUSTER must be either 'ravi' or 'della'"
+    exit 1
+fi
+conda activate vllm_dllm
 
-# initialization: set environment variables
-nvidia-smi
+OUTPUT_DIR="${DATA_DIR}/failfast_llama"
 
-cd $SCRATCH/diffspec_private
-
-OUTPUT_DIR="./outputs"
-
-TARGET_MODEL="meta-llama/Llama-2-70b-hf"
-DATASETS=("math")  #  "aime"
-NUM_QUESTIONS=5
-DIFFUSION_STEPS=(1 2 4)
-SWEEP_lowconf_threshold=(0.4 0.45)  # 0.2, 0.25, 0.3, 0.35, 0.4, 0.45
-SWEEP_max_spec_len=(40 45 50 55)
+TARGET_MODEL="meta-llama/Llama-2-13b-hf"
+DATASETS=("math" "gpqa" "humaneval")  #  "aime"
+NUM_QUESTIONS=30
+DIFFUSION_STEPS=(1)
+SWEEP_lowconf_threshold=(0.4)  # 0.2, 0.25, 0.3, 0.35, 0.4, 0.45
+SWEEP_max_spec_len=(40)
 SWEEP_incr_len=(10)
 
 
@@ -60,6 +76,7 @@ for DATASET_NAME in "${DATASETS[@]}"; do
             --sweep_incr_len "${SWEEP_incr_len[@]}" \
             --log_level INFO \
             --overwrite \
+            --diffullama_dir "/home/rp2773/DiffuLLaMA" \
             --diffullama_dynamic > "$logfile" 2>&1
     done
 done

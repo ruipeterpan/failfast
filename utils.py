@@ -159,10 +159,10 @@ def populate_dataset(args):
     elif args.dataset_name == "math":
         dataset = load_dataset("HuggingFaceH4/MATH-500")["test"]
     elif args.dataset_name == "gpqa":
-        # if os.getenv("HF_HUB_OFFLINE", "0") == "1":
-        #     dataset = load_from_disk("/scratch/gpfs/RAVIAN/rp2773/hf_cache/datasets/gpqa")
-        # else:    
-        dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond")["train"]
+        if os.getenv("HF_HUB_OFFLINE", "0") == "1":
+            dataset = load_from_disk("/scratch/gpfs/RAVIAN/rp2773/hf_cache/datasets/gpqa")
+        else:    
+            dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond")["train"]
     elif args.dataset_name == "mmlu":
         dataset = load_dataset("TIGER-Lab/MMLU-Pro")["validation"]
     elif args.dataset_name == "gsm8k":

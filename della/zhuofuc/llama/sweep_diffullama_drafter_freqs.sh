@@ -1,37 +1,55 @@
 #!/bin/bash
-#SBATCH --job-name=sweep_diffullama             # Job name
-#SBATCH --output="./slurm_logs/sweep_diffullama_%A.out"       # Standard output log
-#SBATCH --error="./slurm_logs/sweep_diffullama_%A.err"         # Standard error log
+#SBATCH --job-name=llama_diffullama              # Job name
+#SBATCH --output="/home/rp2773/slurm_logs/%A.out"       # Standard output log
+#SBATCH --error="/home/rp2773/slurm_logs/%A.err"         # Standard error log
 #SBATCH --ntasks=1                            # Number of tasks (1 process)
 #SBATCH --cpus-per-task=8                     # Number of CPU cores per task
-#SBATCH --gres=gpu:4                        # Number of GPUs to allocate
-##SBATCH --constraint="gpu80"
-#SBATCH --time=2:00:00                        # Time limit (24 hours max)
-#SBATCH --mem-per-cpu=8G                            # Memory allocation (adjust as needed)
-#SBATCH --partition=ailab​
+#SBATCH --gres=gpu:1                        # Number of GPUs to allocate
+#SBATCH --constraint="gpu80"
+#SBATCH --time=1:30:00                        # Time limit (24 hours max)
+#SBATCH --mem=20G                            # Memory allocation (adjust as needed)
+#SBATCH --mail-user=ruipan@princeton.edu  # Your email
+#SBATCH --mail-type=ALL  # Options: BEGIN, END, FAIL, REQUEUE, TIME_LIMIT, etc.
+#SBATCH --partition=pli
+#SBATCH --account=specreason
+##SBATCH --partition=pli-lc
+##SBATCH --account=ravi-group
 
-source ~/.bashrc
+# CLUSTER="ravi"
+CLUSTER="della"
 
-. ~/init.sh <<EOF
--1
-vllm_dllm
-1
-EOF
+# initialization: set environment variables based on the cluster
+if [ "$CLUSTER" = "ravi" ]; then
+    DATA_DIR="/home/ruipan/data2"
+    DLLM_DIR="/data2/ruipan/Fast_dLLM_v2_1.5B"
+    source /data2/ruipan/miniconda3/etc/profile.d/conda.sh
+elif [ "$CLUSTER" = "della" ]; then
+    DATA_DIR="/scratch/gpfs/RAVIAN/rp2773/data"
+    DLLM_DIR="/home/rp2773/data/Fast_dLLM_v2_1.5B"
+    export HF_HOME="/scratch/gpfs/RAVIAN/rp2773/hf_cache"
+    export HF_HUB_OFFLINE=1
+    export HF_DATASETS_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    source /scratch/gpfs/RAVIAN/rp2773/miniconda3/etc/profile.d/conda.sh
+    nvidia-smi
+else
+    echo "Error: CLUSTER must be either 'ravi' or 'della'"
+    exit 1
+fi
+conda activate vllm_dllm
 
-# initialization: set environment variables
-nvidia-smi
+OUTPUT_DIR="${DATA_DIR}/failfast_llama"
 
-cd $SCRATCH/diffspec_private
+TARGET_MODEL="meta-llama/Llama-2-13b-hf"
+DATASETS=("math" "gpqa" "humaneval")  #  "aime"
+NUM_QUESTIONS=30
+DIFFUSION_STEPS=(1)
+VERI_FREQS=(6)
+SWEEP_lowconf_threshold=(0.4)  # 0.2, 0.25, 0.3, 0.35, 0.4, 0.45
+SWEEP_max_spec_len=(40)
+SWEEP_incr_len=(12)
 
-OUTPUT_DIR="./outputs"
 
-TARGET_MODEL="meta-llama/Llama-2-70b-hf"
-DATASETS=("math")  #  "aime"
-NUM_QUESTIONS=5
-DIFFUSION_STEPS=64
-VERI_FREQS=(3 6 9 12 15)
-# VERI_FREQS=(3 4 5 6 7 8 9 10 11 12 13 14 15 16)  # 0.9
-# VERI_FREQS=(5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)  # 0.05
 
 for DATASET_NAME in "${DATASETS[@]}"; do
     timestamp=$(date +"%Y_%m_%d_%H_%M")  # equivalent of datetime.now().strftime("%Y_%m_%d_%H_%M") in python
@@ -46,7 +64,6 @@ for DATASET_NAME in "${DATASETS[@]}"; do
     done
 
     for FREQ in "${VERI_FREQS[@]}"; do
-        echo "Running FREQ: ${FREQ}, using diffusion steps: ${DIFFUSION_STEPS}"
         python failfast.py \
             --dataset_name "${DATASET_NAME}" \
             --output_dir "${OUTPUT_DIR}" \
@@ -54,15 +71,22 @@ for DATASET_NAME in "${DATASETS[@]}"; do
             --num_questions "${NUM_QUESTIONS}" \
             --spec_len "${FREQ}" \
             --max_new_tokens 1024 \
-            --diffullama_diffusion_steps "${DIFFUSION_STEPS}" \
+            --diffullama_diffusion_steps "${FREQ}" \
+            --sweep_lowconf_threshold "${SWEEP_lowconf_threshold[@]}" \
+            --sweep_max_spec_len "${SWEEP_max_spec_len[@]}" \
+            --sweep_incr_len "${SWEEP_incr_len[@]}" \
             --log_level INFO \
+            --overwrite \
             --run_diffullama_sf \
             --baseline_sweep \
-            --overwrite \
-            >> "$logfile" 2>&1
+            --diffullama_dir "/home/rp2773/DiffuLLaMA" > "$logfile" 2>&1
     done
 done
 
         # --read_pickle \
-        # --overwrite \
+        # 
+
+
+
+        
 
