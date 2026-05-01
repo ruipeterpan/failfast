@@ -68,10 +68,31 @@ We use [SpecForge](https://github.com/sgl-project/SpecForge) to pretrain our own
 include the commands we used to profile EAGLE-3's speedup. We will add more documentations and release EAGLE-3 weights soon.
 
 ```
-# vanilla inference
+# env setup
+conda create -n eagle3_vllm python=3.12 -y
+conda activate eagle3_vllm
+python -m pip install vllm==0.13.0 datasets  # install vllm if you want to run EAGLE-3 with a chain of draft tokens, not a tree. 
+
+# install sglang v0.5.6.post2 to run EAGLE-3 with a tree of draft tokens:
+
+# SGLang, vanilla inference
+python -m sglang.launch_server --model Qwen/Qwen2.5-32B-Instruct \
+  --tp 2 --mem-fraction 0.8 --cuda-graph-max-bs 2 --log-level warning --port 30000
+
+# SGLang, tree of draft tokens
+python -m sglang.launch_server --model Qwen/Qwen2.5-32B-Instruct \
+  --tp 2 --speculative-algorithm EAGLE3 \
+  --speculative-draft-model-path ruipeterpan/Qwen2.5-32B-Instruct_EAGLE3_UltraChat \
+  --speculative-num-steps 8 \
+  --speculative-eagle-topk 10 \
+  --speculative-num-draft-tokens 60 \
+  --mem-fraction 0.8 \
+  --cuda-graph-max-bs 2 --log-level warning --port 30000
+
+# vLLM, vanilla inference
 vllm serve Qwen/Qwen2.5-7B-Instruct --dtype auto -tp 2 --max_model_len 2048 --gpu-memory-utilization 0.8 --port 30000
 
-# EAGLE-3
+# vLLM, EAGLE-3, chain of draft tokens
 vllm serve Qwen/Qwen2.5-7B-Instruct --dtype auto -tp 2 --max_model_len 2048 --gpu-memory-utilization 0.9 --port 30000 --speculative_config '{"model": "/path/to/eagle/weights", "draft_tensor_parallel_size": 1, "num_speculative_tokens": 5, "method": "eagle3"}'
 
 # profiling

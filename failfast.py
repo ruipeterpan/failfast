@@ -76,6 +76,95 @@ def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n):
     return generated_ids.tolist()
 
 
+def get_next_tokens_ar(
+    model,
+    orig_model_inputs,
+    token_ids_so_far,
+    n,
+    lowconf_threshold,
+    max_spec_len,
+    incr_len,
+):
+    """AR version of dynamic-length drafting.
+
+    Spiritually similar to `get_next_tokens_dllm` (dynamic frequency), but implemented
+    using an AR model's greedy next-token probability:
+    - Greedily speculate tokens in chunks of `incr_len`
+    - Stop early if any speculated token has confidence < `lowconf_threshold`
+    - Stop once `max_spec_len` is reached (or `n` if `max_spec_len` is None)
+    """
+    if incr_len is None or incr_len <= 0:
+        raise ValueError(f"incr_len must be a positive int, got {incr_len}")
+    if max_spec_len is not None and max_spec_len <= 0:
+        raise ValueError(f"max_spec_len must be a positive int or None, got {max_spec_len}")
+    if lowconf_threshold is None:
+        raise ValueError("lowconf_threshold must not be None for get_next_tokens_ar")
+
+    # Back-compat: if caller doesn't provide max_spec_len, use `n` as the cap.
+    cap = n if max_spec_len is None else max_spec_len
+    if cap <= 0:
+        return [], []
+
+    device = orig_model_inputs["input_ids"].device
+    drafted = []
+    confidences = []
+
+    # Build initial input: prompt + accepted prefix
+    current_tokens = torch.tensor(token_ids_so_far, device=device, dtype=torch.long).unsqueeze(0)
+    current_mask = torch.ones_like(current_tokens, dtype=torch.long)
+    current_inputs = {
+        'input_ids': torch.cat([orig_model_inputs['input_ids'], current_tokens], dim=1),
+        'attention_mask': torch.cat([orig_model_inputs['attention_mask'], current_mask], dim=1)
+    }
+
+    with torch.no_grad():
+        while len(drafted) < cap:
+            # Generate next chunk of tokens
+            chunk_size = min(incr_len, cap - len(drafted))
+            
+            # Use generate() with output_scores to get logits for confidence checking
+            generate_output = model.generate(
+                **current_inputs,
+                max_new_tokens=chunk_size,
+                do_sample=False,  # use greedy decoding
+                output_scores=True,
+                return_dict_in_generate=True,
+            )
+            
+            # Extract generated token IDs (excluding the input)
+            generated_ids = generate_output.sequences[0][len(current_inputs["input_ids"][0]):]
+            generated_ids = generated_ids.tolist()
+            
+            # Check confidence of each generated token
+            # scores is a tuple of tensors, one per generated position
+            scores = generate_output.scores
+            found_lowconf = False
+            for i, (token_id, score_logits) in enumerate(zip(generated_ids, scores)):
+                probs = torch.softmax(score_logits, dim=-1)
+                conf = probs[0, token_id].item()
+                drafted.append(token_id)
+                confidences.append(conf)
+                
+                if conf < lowconf_threshold:
+                    found_lowconf = True
+            
+            # If we found a low-confidence token in this chunk, return after processing the whole chunk
+            if found_lowconf:
+                return drafted, confidences
+            
+            # Update current_inputs for next iteration (if we haven't hit the cap)
+            if len(drafted) < cap:
+                # Append all generated tokens to current_inputs for next generate() call
+                new_tokens = torch.tensor(generated_ids, device=device, dtype=torch.long).unsqueeze(0)
+                new_mask = torch.ones_like(new_tokens, dtype=torch.long)
+                current_inputs = {
+                    'input_ids': torch.cat([current_inputs['input_ids'], new_tokens], dim=1),
+                    'attention_mask': torch.cat([current_inputs['attention_mask'], new_mask], dim=1)
+                }
+
+    return drafted, confidences
+
+
 def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_len, output_seqlen, small_block_size, threshold, is_drafter, prev_prefill_output=None):
     """Get the next n tokens from the model given the token IDs so far.
     """
@@ -94,6 +183,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
             small_block_size=small_block_size,
+            block_size=args.block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
@@ -112,6 +202,7 @@ def get_next_n_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
             small_block_size=small_block_size,
+            block_size=args.block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
@@ -165,6 +256,7 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
             new_model_inputs["input_ids"],
             max_new_tokens=output_seqlen,
             small_block_size=small_block_size,
+            block_size=args.block_size,
             threshold=threshold,
             # use greedy decoding, not sampling
             do_sample=False,
@@ -222,7 +314,14 @@ def get_next_tokens_dllm(dllm, args, orig_model_inputs, token_ids_so_far, spec_l
 def construct_drafter_configs(args):
     drafter_configs = []
     if args.run_ar:  # AR Drafter
-        drafter_configs.extend([("ar", None, "sf", None, None, None)] )
+        drafter_configs.extend([("ar", None, "sf", None, None, None)])
+        if args.ar_dynamic:  # AR Drafter (dynamic frequency)
+            drafter_configs.extend([
+                ("ar", None, "df", lowconf_threshold, max_spec_len, incr_len)
+                for lowconf_threshold in args.sweep_lowconf_threshold
+                for max_spec_len in args.sweep_max_spec_len
+                for incr_len in args.sweep_incr_len
+            ])
     if args.run_dllm_sf:  # Fast-dLLM Drafter
         drafter_configs.extend([("dllm", thr, "sf", None, None, None) for thr in args.drafter_thresholds])
     if not args.baseline_sweep:  # FailFast Drafter
@@ -237,7 +336,7 @@ def construct_drafter_configs(args):
 
 # %%
 parser = argparse.ArgumentParser(description="Profiles the acceptance rate of speculative decoding within a single query.")
-parser.add_argument("--dataset_name", type=str, choices=["aime", "math", "gsm8k", "gpqa", "humaneval"], default="math",
+parser.add_argument("--dataset_name", type=str, choices=["aime", "math", "gsm8k", "gpqa", "humaneval", "mt_bench"], default="math",
                     help="Dataset")
 parser.add_argument("--output_dir", type=str, default="/data2/USERNAME/failfast", 
                     help="Where result pickle files (and output figures) will be written to")
@@ -251,6 +350,8 @@ parser.add_argument("--max_new_tokens", type=int, default=1024,
                     help="Max new tokens from the target model")
 parser.add_argument("--block_size", type=int, default=32,
                     help="Block size in Fast-dLLM")
+parser.add_argument("--small_block_size", type=int, default=8,
+                    help="Small block size in Fast-dLLM")
 parser.add_argument("--spec_len", type=int, default=10,
                     help="Frequency of verification steps (in number of tokens)")
 parser.add_argument("--drafter_thresholds", type=float, nargs="+",  # one or more float thresholds
@@ -262,7 +363,7 @@ parser.add_argument("--log_level",
                     choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                     help="Set the logging level")
 parser.add_argument("--sweep_lowconf_threshold", type=float, nargs="+",
-                    default=[0.4],
+                    default=[0.45],
                     help="τ in FailFast Alg. 1")
 parser.add_argument("--sweep_max_spec_len", type=int, nargs="+",
                     default=[60],
@@ -271,6 +372,7 @@ parser.add_argument("--sweep_incr_len", type=int, nargs="+",
                     default=[10],
                     help="N in FailFast Alg. 1")
 parser.add_argument('--run_ar', action='store_true', help='Run the AR drafter to compare speedups')
+parser.add_argument('--ar_dynamic', action='store_true', help='Also run the AR drafter in dynamic mode (FailFast-style stop condition)')
 parser.add_argument('--run_dllm_sf', action='store_true', help='Run the dLLM drafter with static frequency (in param sweep for baselines)')
 parser.add_argument('--baseline_sweep', action='store_true', help='Running a baseline sweep, don\'t run dynamic frequency')
 parser.add_argument('--overwrite', action='store_true', help='Overwrite existing output pickles and figures')
@@ -278,27 +380,30 @@ parser.add_argument('--reuse_drafts', action='store_true', help='Reuses drafted 
 parser.add_argument('--disable_reusing_drafter_kvs', action='store_true', help='Disables reusing drafter KV cache across verification rounds')
 parser.add_argument('--read_pickle', action='store_true', help='Use acceptance decisions from a cached pickle file rather than rerunning')
 args, _ = parser.parse_known_args()
-args.target_model_name_clean = args.target_model_name.split("/", 1)[1]
 
 
-######custom fields for easier debugging######
+
+######custom fields for easier debugging########
 # args.log_level = "DEBUG"
 # args.disable_reusing_drafter_kvs = True
 # args.dataset_name = "gpqa"
 # args.overwrite = True
 # args.max_new_tokens = 1024
 # args.run_ar = True
+# args.ar_dynamic = True
 # args.baseline_sweep = True
-# args.spec_len = 8
+# args.spec_len = 16
+# args.block_size = 32
+# args.small_block_size = 16
 # args.run_dllm_sf = True
 # args.read_pickle = True  # XXX: read trajectory from pickle as well in future debugging
 # args.target_model_name = "Qwen/Qwen2.5-7B-Instruct"  # for easier debugging
 # args.sweep_lowconf_threshold = [0.4]
-# args.sweep_max_spec_len = [50]
-# args.sweep_incr_len = [10]
+# args.sweep_max_spec_len = [96]
+# args.sweep_incr_len = [16]
 ######custom fields for easier debugging######
 
-
+args.target_model_name_clean = args.target_model_name.split("/", 1)[1]
 logging.basicConfig(
     level=getattr(logging, args.log_level),
     format="[%(asctime)s %(levelname)s] %(message)s",
@@ -318,14 +423,6 @@ args.latency = {  # all in ms
             "Qwen2.5-32B-Instruct": 52.6,
         },
     },
-    # "vLLM_H100": {  # profiling was inaccurate
-    #     "draft_fwd_pass": 2.9,  # eager mode: 9.25?
-    #     "target_tpt": {  # eager mode on
-    #         "Qwen2.5-14B-Instruct": 14.3,  # w/o eager mode: 14.3. 8.45??
-    #         "Qwen2.5-32B-Instruct": 18.6,
-    #         "Qwen2.5-72B-Instruct": 32.2,
-    #     },
-    # },
 }
 
 target_tokenizer = AutoTokenizer.from_pretrained(args.target_model_name)
@@ -422,9 +519,23 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                 
                 # A. PROPOSE: Get next n speculative tokens from draft model based on current accepted prefix
                 if draft_type == "ar":
-                    draft_proposal = get_next_n_tokens_ar(draft_model, orig_model_inputs, current_token_ids, n=args.spec_len)
-                    num_forward_passes = args.spec_len  # 1 fwd pass per token for AR drafter
-                    spec_len = args.spec_len
+                    if freq_scheme == "sf":
+                        draft_proposal = get_next_n_tokens_ar(draft_model, orig_model_inputs, current_token_ids, n=args.spec_len)
+                        spec_len = args.spec_len
+                    else:
+                        draft_proposal, confidences = get_next_tokens_ar(
+                            draft_model,
+                            orig_model_inputs,
+                            current_token_ids,
+                            n=args.spec_len,
+                            lowconf_threshold=lowconf_threshold,
+                            max_spec_len=max_spec_len,
+                            incr_len=incr_len,
+                        )
+                        spec_len = len(draft_proposal)
+                        logging.debug(f"[Round {num_speculation_rounds}] AR drafter proposed {spec_len} tokens: {draft_proposal}")
+                        logging.debug(f"[Round {num_speculation_rounds}] AR drafter confidences: {[round(r, 2) for r in confidences]}")
+                    num_forward_passes = spec_len  # 1 fwd pass per token for AR drafter
                 elif draft_type == "dllm":
                     if freq_scheme == "sf":  # static frequency
                         spec_len = args.spec_len
@@ -432,14 +543,14 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                             draft_proposal, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 2 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
-                                                                    small_block_size=8,
+                                                                    small_block_size=args.small_block_size,
                                                                     threshold=drafter_threshold,
                                                                     is_drafter=True,)
                         else:
                             draft_proposal, prefill_output, num_forward_passes, forward_pass_latencies = get_next_n_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 2 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
-                                                                    small_block_size=8,
+                                                                    small_block_size=args.small_block_size,
                                                                     threshold=drafter_threshold,
                                                                     is_drafter=True,
                                                                     prev_prefill_output=prev_prefill_output)
@@ -460,7 +571,7 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
                         draft_proposal, actual_spec_len, prefill_output, num_forward_passes, forward_pass_latencies = get_next_tokens_dllm(dllm, args, orig_model_inputs, current_token_ids, 
                                                                     spec_len=args.spec_len,  # number of speculative tokens proposed each time
                                                                     output_seqlen=3*args.block_size,  # 3 blocks of 32. Ensures spec_len tokens are generated in case they span over two blocks
-                                                                    small_block_size=8,
+                                                                    small_block_size=args.small_block_size,
                                                                     threshold=drafter_threshold,
                                                                     is_drafter=True,
                                                                     prev_prefill_output=prev_prefill_output,
@@ -615,8 +726,11 @@ for problem_id in tqdm(range(args.num_questions), desc="Problems", position=0):
         if (args.overwrite and not args.read_pickle) or (not os.path.exists(os.path.join(output_dir_pickles, f"{args.max_new_tokens}.pickle"))):
             with open(os.path.join(output_dir_pickles, f"{args.max_new_tokens}.pickle"), "wb") as f:
                 pickle.dump(pickled_data, f)
+                logging.info(f"Saved pickled data to {os.path.join(output_dir_pickles, f"{args.max_new_tokens}.pickle")}")
             with open(os.path.join(output_dir_pickles, f"{args.max_new_tokens}.txt"), "w") as f:
                 pp = pprint.PrettyPrinter(width=1000, stream=f)  # large enough to fit list
                 pp.pprint(pickled_data)
+        else:
+            logging.info(f"Skipping save for pickled data to {os.path.join(output_dir_pickles, f"{args.max_new_tokens}.pickle")}")
 
 # %%

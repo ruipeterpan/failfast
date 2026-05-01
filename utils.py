@@ -36,8 +36,13 @@ def is_interactive():
 def format_drafter_name(args, drafter_config):
     draft_type, drafter_threshold, freq_scheme, lowconf_threshold, \
         max_spec_len, incr_len = drafter_config
-    if draft_type == "ar":  # ar
-        return f"ar_None_sf_{args.spec_len}"
+    if draft_type == "ar":
+        if freq_scheme == "sf":
+            return f"ar_None_sf_{args.spec_len}"
+        elif freq_scheme == "df":
+            return f"ar_None_df_{lowconf_threshold}_{max_spec_len}_{incr_len}"
+        else:
+            raise ValueError(f"Unknown freq_scheme for AR drafter: {freq_scheme}")
     else:  # dllm
         if freq_scheme == "sf":  # Fast-dLLM, static frequency
             return f"dllm_{drafter_threshold}_sf_{args.spec_len}"
@@ -46,6 +51,8 @@ def format_drafter_name(args, drafter_config):
                 return f"dllm_{drafter_threshold}_df"  # obsolete
             else:
                 return f"dllm_{drafter_threshold}_df_{lowconf_threshold}_{max_spec_len}_{incr_len}"
+        else:
+            raise ValueError(f"Unknown freq_scheme for dLLM drafter: {freq_scheme}")
 
 
 
@@ -153,6 +160,8 @@ def populate_dataset(args):
         dataset = load_dataset("openai/gsm8k", "main")["test"]
     elif args.dataset_name == "humaneval":
         dataset = load_dataset("openai/openai_humaneval")["test"]
+    elif args.dataset_name == "mt_bench":
+        dataset = load_dataset("philschmid/mt-bench")["train"]
     else:
         raise NotImplementedError
     args.dataset = dataset
@@ -184,11 +193,13 @@ def format_problem_and_options(args, problem_id):
     elif args.dataset_name == "humaneval":
         data = args.dataset[problem_id]
         return {"problem": data["prompt"]}
+    elif args.dataset_name == "mt_bench":
+        return {"problem": args.dataset["turns"][problem_id + 60][0]}
     else:
         raise NotImplementedError
 
 def get_first_user_msg(args, raw_data):
-    if args.dataset_name in ["aime", "math"]:
+    if args.dataset_name in ["aime", "math", "gsm8k"]:
         system_prompt = """
         Solve the following math problem efficiently and clearly. Please reason step by step, 
         separate logical reasoning steps with two newline characters (\n\n), and put your final answer within \\boxed{{}}.
@@ -230,14 +241,6 @@ def get_first_user_msg(args, raw_data):
             problem=raw_data["problem"],
             options=raw_data["options"],
         )
-    elif args.dataset_name == "gsm8k":
-        system_prompt = """
-        Think step by step and then please provide an efficient and self-contained Python script that solves the following problem in a markdown code block:
-        ```
-        {problem}
-        ```
-        """
-        return system_prompt.format(problem=raw_data["problem"])
     elif args.dataset_name == "humaneval":
         system_prompt = """
         Think step by step and then please provide an efficient and self-contained Python script that solves the following problem in a markdown code block:
@@ -245,6 +248,19 @@ def get_first_user_msg(args, raw_data):
         {problem}
         ```
         """
+        return system_prompt.format(problem=raw_data["problem"])
+    elif args.dataset_name in ["mt_bench"]:
+        system_prompt = """
+        Solve the following problem efficiently and clearly. Please reason step by step, 
+        separate logical reasoning steps with two newline characters (\n\n), and put your final answer within \\boxed{{}}.
+        Problem: {problem}
+        """
+        # system_prompt = """
+        # Think step by step and then please provide an efficient and self-contained Python script that solves the following problem in a markdown code block:
+        # ```
+        # {problem}
+        # ```
+        # """
         return system_prompt.format(problem=raw_data["problem"])
     else:
         raise NotImplementedError
