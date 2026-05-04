@@ -52,7 +52,7 @@ def get_next_n_tokens_ar(model, orig_model_inputs, token_ids_so_far, n, temperat
     generate_output = model.generate(
         **new_model_inputs,
         max_new_tokens=n,
-        do_sample=True,  # use greedy decoding
+        do_sample=True,
         temperature=temperature,
         top_p=1.0,
         top_k=0.0,

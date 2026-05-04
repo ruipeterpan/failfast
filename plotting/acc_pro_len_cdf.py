@@ -92,7 +92,8 @@ def values_to_cdf(values):
 # 4. Plotting Execution
 # ==========================================
 
-fig, ax = plt.subplots(figsize=(6, 2.5))
+# fig, ax = plt.subplots(figsize=(6, 2.5))
+fig, ax = plt.subplots(figsize=(5, 2.75))
 
 # -- Prepare Data for AR --
 # Note: values_to_cdf sorts the list in place, so the list itself becomes the X-axis
